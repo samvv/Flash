@@ -1,70 +1,249 @@
 
-import { BoltLiftedTypeExpression, SourceFile, Syntax, SyntaxKind } from "./ast";
-import { FastStringMap } from "./util";
+import { throws } from "assert";
+import { kMaxLength } from "buffer";
+import { assert, timeStamp } from "console";
+import { BoltBindPattern, BoltIdentifier, isJSTryCatchStatement, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
+import { getSymbolText } from "./common";
+import { E_TYPE_DECLARATION_NOT_FOUND } from "./diagnostics";
+import { FastStringMap, pushAll } from "./util";
 
 enum TypeKind {
   TypeVar,
   PrimType,
-  ForallType,
   ArrowType,
 }
 
 type Type
   = TypeVar
   | PrimType
-  | ForallType
   | ArrowType
 
 interface TypeBase {
   kind: TypeKind;
 }
 
-interface TypeVar extends TypeBase {
-  kind: TypeKind.TypeVar;
-  varId: string;
+function createGenerator(defaultPrefix: string) {
+  const counts = Object.create(null);
+  return function (prefix = defaultPrefix) {
+    const count = counts[prefix];
+    if (count !== undefined) {
+      counts[prefix]++;
+      return prefix + count;
+    }
+    counts[prefix] = 1;
+    return prefix + '0';
+  }
 }
 
-interface PrimType extends TypeBase {
-  kind: TypeKind.PrimType;
-  primId: number;
-  name: string;
+const generateTypeVarId = createGenerator('a');
+
+class TypeVar implements TypeBase {
+
+  public readonly kind: TypeKind.TypeVar = TypeKind.TypeVar;
+
+  public varId: string;
+
+  constructor(public hint?: string) {
+    this.varId = generateTypeVarId(hint);
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    return typeVar.varId === this.varId;
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Type {
+    if (substitution.has(this)) {
+      return substitution.get(this);
+    } else {
+      return this;
+    }
+  }
+
+  public format() {
+    return this.varId;
+  }
+
+}
+
+class PrimType implements TypeBase {
+
+  public readonly kind: TypeKind.PrimType = TypeKind.PrimType;
+
+  constructor(
+    public primId: number,
+    public displayName: string,
+  ) {
+
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    return false;
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution) {
+    return this;
+  }
+
+  public format() {
+    return this.displayName;
+  }
+
+}
+
+class ArrowType implements TypeBase {
+
+  public readonly kind: TypeKind.ArrowType = TypeKind.ArrowType;
+
+  constructor(
+    public paramTypes: Type[],
+    public returnType: Type
+  ) {
+
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    return this.paramTypes.some(paramType => paramType.hasTypeVariable(typeVar))
+        || this.returnType.hasTypeVariable(typeVar);
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Type {
+    return new ArrowType(
+      this.paramTypes.map(type => type.applySubstitution(substitution)),
+      this.returnType.applySubstitution(substitution)
+    )
+  }
+
+  public format(): string {
+    return `(${this.paramTypes.map(type => type.format()).join(', ')}) -> ${this.returnType.format()}`
+  }
+
+}
+
+function getFreeTypeVariablesOfType(type: Type) {
+
+  const freeVariables = new Set<string>();
+
+  const visit = (type: Type) => {
+
+    switch (type.kind) {
+
+      case TypeKind.TypeVar:
+        freeVariables.add(type.varId);
+        break;
+
+      case TypeKind.PrimType:
+        break;
+
+      case TypeKind.ArrowType:
+        for (const paramType of type.paramTypes) {
+          visit(paramType);
+        }
+        visit(type.returnType);
+        break;
+
+      default:
+        throw new Error(`Could not get the free type variables: unknown type kind`);
+
+    }
+
+  }
+
+  visit(type);
+
+  return freeVariables;
+
 }
 
 class TypeVarSubstitution {
 
-  private mapping = new FastStringMap<string, Type>()
+  private mapping = new FastStringMap<string, [TypeVar, Type]>();
 
   public add(source: TypeVar, target: Type) {
-    this.mapping.set(source.varId, target);
+    if (this.mapping.has(source.varId)) {
+      throw new Error(`Could not add type variable to substitution: variable ${source.varId} already exists.`)
+    }
+    this.mapping.set(source.varId, [source, target]);
   }
 
-  public assign(other: TypeVarSubstitution): void {
-    for (const [name, type] of other.mapping) {
-      this.mapping.overwrite(name, type);
+  public has(source: TypeVar): boolean {
+    return this.mapping.has(source.varId);
+  }
+
+  public compose(other: TypeVarSubstitution): TypeVarSubstitution {
+    const newSubstitution = new TypeVarSubstitution();
+    for (const [typeVar, type] of other) {
+      newSubstitution.add(typeVar, type.applySubstitution(this));
+    }
+    for (const [typeVar, type] of this) {
+      newSubstitution.add(typeVar, type);
+    }
+    return newSubstitution;
+  }
+
+  public defaults(other: TypeVarSubstitution): void{ 
+    for (const [name, entry] of other.mapping) {
+      if (!this.mapping.has(name)) {
+        this.mapping.set(name, entry);
+      }
+    }
+  }
+
+  public get(source: TypeVar): Type {
+    return this.mapping.get(source.varId)[1];
+  }
+
+  public *[Symbol.iterator](): Iterator<[TypeVar, Type]> {
+    for (const [source, target] of this.mapping.values()) {
+      yield [source, target];
     }
   }
 
 }
 
-interface ForallType extends TypeBase {
-  kind: TypeKind.ForallType;
-  typeVars: TypeVarSubstitution;
-  type: Type;
+const emptyTypeVarSubstitution = new TypeVarSubstitution();
+
+enum SchemeType {
+  Forall,
 }
 
-interface ArrowType extends TypeBase {
-  kind: TypeKind.ArrowType;
-  paramTypes: Type[];
-  returnType: Type;
+class ForallScheme {
+
+  private typeVarIds = new Set<string>();
+
+  constructor(
+    public typeVars: TypeVar[],
+    public type: Type,
+  ) {
+    this.typeVarIds = new Set(typeVars.map(tv => tv.varId));
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Scheme {
+    const newSubstitution = new TypeVarSubstitution();
+    for (const [typeVar, mappedType] of substitution) {
+      if (!this.typeVarIds.has(typeVar.varId)) {
+        newSubstitution.add(typeVar, mappedType);
+      }
+    }
+    return new ForallScheme(
+      this.typeVars,
+      this.type.applySubstitution(newSubstitution)
+    );
+  }
+
 }
+
+type Scheme
+  = ForallScheme
 
 type Constraint = [Type, Type]
 
-class TypeEnv {
+type InferResult = [Type, Array<Constraint>]
 
-  private mapping = new FastStringMap<string, Type>();
+export class TypeEnv {
 
-  public set(name: string, scheme: Type) {
+  private mapping = new FastStringMap<string, Scheme>();
+
+  public set(name: string, scheme: Scheme) {
     this.mapping.set(name, scheme)
   }
 
@@ -76,13 +255,38 @@ class TypeEnv {
     if (!this.mapping.has(name)) {
       return null;
     }
-    return this.mapping.get(name)
+    const scheme = this.mapping.get(name);
+    const freshVars = new TypeVarSubstitution();
+    for (const typeVar of scheme.typeVars) {
+      freshVars.add(typeVar, new TypeVar())
+    }
+    return scheme.type.applySubstitution(freshVars);
   }
 
   public has(typeVar: TypeVar): boolean {
     return this.mapping.has(typeVar.varId)
   }
 
+  public clone(): TypeEnv {
+    const result = new TypeEnv();
+    for (const [name, scheme] of this.mapping) {
+      result.set(name, scheme);
+    }
+    return result;
+  }
+
+}
+
+function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
+  if (type.kind === TypeKind.TypeVar && type.varId === typeVar.varId) {
+    return emptyTypeVarSubstitution;
+  }
+  if (type.hasTypeVariable(typeVar)) {
+    throw new Error(`Type ${type.format()} has ${typeVar.format()} as an unbound free type variable.`);
+  }
+  const substitution = new TypeVarSubstitution();
+  substitution.add(typeVar, type);
+  return substitution
 }
 
 export class TypeChecker {
@@ -101,110 +305,28 @@ export class TypeChecker {
     return type === this.stringType;
   }
 
-  private builtinTypes = new FastStringMap([
+  private builtinTypes = new FastStringMap<string, Type>([
     ['int', this.intType],
     ['String', this.stringType]
   ]);
 
-  private createTypeVar(): TypeVar {
-    return { kind: TypeKind.TypeVar, varId: (this.nextVarId++).toString() }
-  }
-
   private createPrimType(name: string): PrimType {
-    return { kind: TypeKind.PrimType, name, primId: this.nextPrimTypeId++ }
-  }
-
-  private createArrowType(paramTypes: Type[], returnType: Type): ArrowType {
-    return { kind: TypeKind.ArrowType, paramTypes, returnType }
-  }
-
-  private createForallType(typeVars: FastStringMap<string, TypeVar>, type: Type): ForallType {
-    return { kind: TypeKind.ForallType, typeVars, type }
+    return new PrimType(this.nextPrimTypeId++, name);
   }
 
   public registerSourceFile(sourceFile: SourceFile): void {
     
   }
 
-  private addFreeVariables(type: Type, freeVariables: Set<string>, excludedVariables: Set<string>) {
-
-    switch (type.kind) {
-
-      case TypeKind.PrimType:
-        break;
-
-      case TypeKind.TypeVar:
-        if (!excludedVariables.has(type.varId)) {
-          freeVariables.add(type.varId);
-        }
-        break;
-
-      case TypeKind.ArrowType:
-        for (const paramType of type.paramTypes) {
-          this.addFreeVariables(paramType, freeVariables, excludedVariables);
-        }
-        this.addFreeVariables(type.returnType, freeVariables, excludedVariables);
-        break;
-
-      case TypeKind.ForallType:
-        const newExcludedVariables = new Set(excludedVariables);
-        for (const typeVar of type.typeVars.values()) {
-          newExcludedVariables.add(typeVar.varId);
-        }
-        this.addFreeVariables(type.type, freeVariables, newExcludedVariables)
-        break;
-
-      default:
-        throw new Error(`Could not determine the free variables in an unknown type`)
-
-    }
-
-  }
-
-  private applySubstitution(type: Type, substitution: TypeVarSubstitution): Type {
-
-    switch (type.kind) {
-
-      case TypeKind.PrimType:
-        return type;
-
-      case TypeKind.TypeVar:
-        if (substitution.has(type.varId)) {
-          return substitution.get(type.varId)
-        } else {
-          return type;
-        }
-
-      case TypeKind.ArrowType:
-        return this.createArrowType(
-          type.paramTypes.map(t => this.applySubstitution(t, substitution)),
-          this.applySubstitution(type.returnType, substitution)
-        )
-
-      case TypeKind.ForallType:
-        const newSubstitution = new TypeVarSubstitution();
-        for (const [name, mappedType] of substitution) {
-          if (!type.typeVars.has(name)) {
-            newSubstitution.set(name, mappedType);
-          }
-        }
-        return this.createForallType(type.typeVars, this.applySubstitution(type.type, newSubstitution));
-
-      default:
-        throw new Error(`Could not substitute unrecognosed type`);
-
-    }
-
-  }
-
   private applySubstitutionToConstraints(constraints: Constraint[], substitution: TypeVarSubstitution): void {
     for (let i = 0; i < constraints.length; i++) {
-      constraints[i][0] = this.applySubstitution(constraints[i][0], substitution)
-      constraints[i][1] = this.applySubstitution(constraints[i][1], substitution)
+      const constraint = constraints[i];
+      constraint[0] = constraint[0].applySubstitution(substitution)
+      constraint[1] = constraint[1].applySubstitution(substitution)
     }
   }
 
-  private inferNode(node: Syntax, env: TypeEnv) {
+  private inferNode(node: Syntax, env: TypeEnv, constraints: Constraint[]): Type {
 
     switch (node.kind) {
 
@@ -214,20 +336,57 @@ export class TypeChecker {
           return this.intType;
         } else if (typeof(node.value === 'string')) {
           return this.stringType;
+        } else {
+          throw new Error(`Could not infer type of BoltConstantExpression`)
         }
       }
 
       case SyntaxKind.BoltReferenceExpression:
       {
-        return this.createTypeVar()
+        const text = getSymbolText(node.name.name);
+        if (text === '+') {
+          return new ArrowType([ this.intType, this.intType ], this.intType);
+        }
+        const type = env.lookup(text)
+        assert(type !== null);
+        return type!;
       }
 
       case SyntaxKind.BoltCallExpression:
       {
-        const operatorType = this.createTypeVar()
-        const operandTypes = node.operands.map(this.createTypeVar.bind(this))
-        return this.createArrowType(operandTypes, operatorType);
+        const operatorType = this.inferNode(node.operator, env, constraints)
+        const operandTypes = [];
+        for (const operand of node.operands) {
+          const operandType = this.inferNode(operand, env, constraints);
+          operandTypes.push(operandType)
+        }
+        const returnType = new TypeVar();
+        constraints.push([
+          operatorType,
+          new ArrowType(operandTypes, returnType)
+        ])
+        return returnType;
       }
+
+      case SyntaxKind.BoltFunctionExpression:
+      {
+        const tvs = [];
+        const newEnv = env.clone();
+        for (const param of node.params) {
+          const tv = new TypeVar();
+          tvs.push(tv)
+          const x = (param.bindings as BoltBindPattern).name.text;
+          newEnv.set(x, new ForallScheme([], tv))
+        }
+        const returnType = this.inferNode(node.expression!, newEnv, constraints);
+        return new ArrowType(
+          tvs,
+          returnType
+        );
+      }
+
+      default:
+        throw new Error(`Could not infer type of node ${kindToString(node.kind)}`)
 
     }
 
@@ -241,11 +400,11 @@ export class TypeChecker {
     let substitution = new TypeVarSubstitution();
     while (true) {
       if (constraints.length === 0) {
-        return substitution
+        return substitution;
       }
       const [a, b] = constraints.pop()!;
-      const newSubstitution = this.unify(a, b);
-      substitution.assign(newSubstitution);
+      const newSubstitution = this.unifies(a, b);
+      substitution = newSubstitution.compose(substitution);
       this.applySubstitutionToConstraints(constraints, newSubstitution);
     }
   }
@@ -278,25 +437,40 @@ export class TypeChecker {
     throw new Error(`Unexpected combination of types while checking equality`)
   }
 
-  private unify(a: Type, b: Type): TypeVarSubstitution {
+  private unifies(a: Type, b: Type): TypeVarSubstitution {
     if (this.areTypesEqual(a, b)) {
       return new TypeVarSubstitution();
     }
     if (a.kind === TypeKind.TypeVar) {
-      const substitution = new TypeVarSubstitution();
-      substitution.add(a, b);
-      return substitution
+      return bindTypeVar(a, b);
     }
     if (b.kind === TypeKind.TypeVar) {
-      const substitution = new TypeVarSubstitution();
-      substitution.add(b, a);
-      return substitution
+      return bindTypeVar(b, a);
     }
-    throw new Error(`Types ${a} and ${b} could not be unified`)
+    if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
+      if (a.paramTypes.length !== b.paramTypes.length) {
+        throw new Error(`Parameter count does not match.`)
+      }
+      let substitution = new TypeVarSubstitution();
+      let returnA = a.returnType;
+      let returnB = b.returnType;
+      for (let i = 0; i < a.paramTypes.length; i++) {
+        const paramSubstitution = this.unifies(a.paramTypes[i], b.paramTypes[i]);
+        returnA = returnA.applySubstitution(paramSubstitution);
+        returnB = returnB.applySubstitution(paramSubstitution);
+        substitution = paramSubstitution.compose(substitution);
+      }
+      const returnSubstitution = this.unifies(returnA, returnB);
+      return returnSubstitution.compose(substitution);
+    }
+    throw new Error(`Types ${a.format()} and ${b.format()} could not be unified`)
   }
 
-  public getTypeOfNode(node: Syntax, env: TypeEnv): unknown {
-    return this.inferNode(node, env);
+  public getTypeOfNode(node: Syntax, env: TypeEnv = new TypeEnv()): Type {
+    const constraints: Constraint[] = [];
+    const type = this.inferNode(node, env, constraints);
+    const substitution = this.solveConstraints(constraints);
+    return type.applySubstitution(substitution);
   }
 
   public isBuiltinType(name: string) {

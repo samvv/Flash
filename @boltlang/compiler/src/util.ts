@@ -435,7 +435,9 @@ export class FastStringMap<K extends PropertyKey, V> {
     this.mapping.clear();
   }
 
-  public overwrite(key: K, value: V): void {
+  // FIXME Some users of this method wrongly expect this method to throw an
+  //       error when the key already exists.
+  public set(key: K, value: V): void {
     this.mapping[key] = value;
   }
 
@@ -464,12 +466,12 @@ export class FastStringMap<K extends PropertyKey, V> {
     }
   }
 
-  public set(key: K, value: V): void {
-    if (key in this.mapping) {
-      throw new Error(`A value for key '${key}' already exists.`);
-    }
-    this.mapping[key] = value
-  }
+  //public set(key: K, value: V): void {
+  //  if (key in this.mapping) {
+  //    throw new Error(`A value for key '${key}' already exists.`);
+  //  }
+  //  this.mapping[key] = value
+  //}
 
   public has(key: K): boolean {
     return key in this.mapping;
