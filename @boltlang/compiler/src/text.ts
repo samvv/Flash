@@ -17,7 +17,7 @@ export class TextFile {
     return path.resolve(this.origPath)
   }
 
-  private [inspectTag](depth: numbber | null, options: InspectOptionsStylized) {
+  private [inspectTag](depth: number | null, options: InspectOptionsStylized) {
     return `TextFile { ${this.origPath} }`
   }
 
