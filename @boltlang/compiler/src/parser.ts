@@ -104,7 +104,7 @@ import {
 import { Stream, uniq } from "./util"
 
 import { Scanner } from "./scanner"
-import { TextSpan, TextPos } from "./text"
+import { TextSpan, TextPos, TextFile } from "./text"
 import {JSScanner} from "./foreign/js/scanner";
 import { Package } from "./package"
 
@@ -581,16 +581,23 @@ export class Parser {
       assertToken(t3, SyntaxKind.BoltComma);
     }
     let returnType = null;
-    let t4 = tokens.get();
+    let t4 = tokens.peek();
     if (t4.kind === SyntaxKind.BoltRArrow) {
+      tokens.get();
       returnType = this.parseTypeExpression(tokens);
-      t4 = tokens.get();
+      t4 = tokens.peek();
     }
-    assertToken(t4, SyntaxKind.BoltBraced);
-    const innerTokens = createTokenStream(t4);
-    const body = this.parseFunctionBodyElements(innerTokens);
-    const result = createBoltFunctionExpression(params, returnType, body);
-    setOrigNodeRange(result, t0, t4);
+    let body = null;
+    let expr = null;
+    if (t4.kind === SyntaxKind.BoltBraced) {
+      assertToken(t4, SyntaxKind.BoltBraced);
+      const innerTokens = createTokenStream(t4);
+      body = this.parseFunctionBodyElements(innerTokens);
+    } else {
+      expr = this.parseExpression(tokens);
+    }
+    const result = createBoltFunctionExpression(params, returnType, body, expr);
+    setOrigNodeRange(result, t0, expr !== null ? expr : t4);
     return result;
   }
 
@@ -843,7 +850,7 @@ export class Parser {
     while (true) {
 
       // FIXME The following expression is incorrectly parsed: 0..fac()
-    
+
       let t2 = tokens.peek();
       const firstToken = t2;
 
@@ -875,6 +882,7 @@ export class Parser {
       const innerTokens = createTokenStream(t2);
 
       while (true) {
+
         const t3 = innerTokens.peek();
         if (t3.kind === SyntaxKind.EndOfFile) {
           break; 

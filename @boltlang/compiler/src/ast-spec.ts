@@ -332,7 +332,8 @@ export interface BoltMemberExpression extends BoltExpression {
 export interface BoltFunctionExpression extends BoltExpression {
   params: BoltParameter[],
   returnTypeExpr: BoltTypeExpression | null,
-  body: BoltFunctionBodyElement[],
+  body: BoltFunctionBodyElement[] | null,
+  expression: BoltExpression | null;
 }
 
 export interface BoltCallExpression extends BoltExpression {
@@ -425,7 +426,7 @@ export interface BoltModule extends BoltSyntax, BoltSourceElement {
   elements: BoltSourceElement[],
 }
 
-export interface BoltDeclarationLike {}
+export interface BoltDeclarationLike extends BoltSourceElement {}
 
 export interface BoltFunctionBodyElement extends FunctionBodyElement {}
 
