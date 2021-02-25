@@ -4,9 +4,9 @@
   "private": true,
   "description": "The root workspace for building various Bolt language tools",
   "workspaces": [
-    "@boltlang/compiler",
-    "@boltlang/langserver",
-    "@boltlang/cli"
+    "compiler",
+    "langserver",
+    "cli"
   ],
   "scripts": {
     "code": "code --extensionDevelopmentPath=\"$(pwd)/vscode-extension\""
