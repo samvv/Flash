@@ -22,13 +22,7 @@ module.exports = {
   module: {
     rules: [
       {
-        test: /\.ts$/,
-        exclude: /node_modules/,
-        loader: "ts-loader",
-        options: { transpileOnly: true }
-      },
-      {
-        test: /\.m?js$/,
+        test: /\.(m?js|ts)$/,
         exclude: /node_modules/,
         loader: 'babel-loader'
       },
