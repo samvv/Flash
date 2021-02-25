@@ -2,28 +2,44 @@
 import net from "net"
 import minimist from "minimist"
 import {
+  Connection,
   createConnection,
   Diagnostic,
   DiagnosticSeverity,
   DidChangeConfigurationNotification,
-  IConnection,
   InitializeParams,
   InitializeResult,
   ProposedFeatures,
   TextDocuments,
   TextDocumentSyncKind
 } from "vscode-languageserver";
+import IntervalTree from "@flatten-js/interval-tree"
 import { TextDocument } from "vscode-languageserver-textdocument";
 
 import { createTokenStream, ParseError, ScanError } from "@boltlang/compiler/common";
 import { Parser } from "@boltlang/compiler/parser";
 import { Scanner } from "@boltlang/compiler/scanner";
-import { TextFile } from "@boltlang/compiler/text";
-import { FastStringMap } from "@boltlang/compiler/util";
+import { TextFile, TextSpan } from "@boltlang/compiler/text";
+import { assert, FastStringMap } from "@boltlang/compiler/util";
+import { isBoltReferenceExpression, isBoltToken, SourceFile, Syntax } from "@boltlang/compiler/ast";
+import { TypeChecker } from "@boltlang/compiler/checker";
+
+interface TextPositionLike {
+  line: number;
+  column: number;
+}
+
+interface TextSpanLike {
+  start: TextPositionLike;
+  end: TextPositionLike;
+}
+
+function isTextSpanBetween(start: TextPositionLike, target: TextSpanLike, end: TextPositionLike): boolean {
+  return ((start.line === target.start.line && start.column >= target.start.column) || start.line > target.start.line)
+      && (((end.line === target.end.line) && end.column <= target.end.column) || end.line < target.end.line);
+}
 
 const args = minimist(process.argv.slice(2))
-
-let connection: IConnection;
 
 if (args.socket) {
   if (typeof(args.socket) !== 'number') {
@@ -45,9 +61,54 @@ interface BoltWorkspaceFolder {
   uri: string;
 }
 
-function configureConnection(connection: IConnection) {
+class SourceFileHandle {
+
+  private offsetToNode = new IntervalTree()
+  private lineToOffset = [ 0 ];
+
+  constructor(
+    public sourceText: string,
+    public sourceFile: SourceFile
+  ) {
+    for (const node of sourceFile.preorder()) {
+      if (!isBoltReferenceExpression(node)) {
+        this.offsetToNode.insert([node.span!.start.offset, node.span!.end.offset], node)
+      }
+    }
+    let currOffset = 0;
+    while (currOffset < this.sourceText.length) {
+      const ch = this.sourceText[currOffset]
+      currOffset++;
+      if (ch === '\n') {
+        this.lineToOffset.push(currOffset);
+      }
+    }
+  }
+
+  public getOffset(position: TextPositionLike): number | null {
+    if ((position.line-1) >= this.lineToOffset.length) {
+      return null;
+    }
+    return this.lineToOffset[position.line] + position.column;
+  }
+
+  public getNodeAtOffset(offset: number): Syntax | null {
+    const matches = this.offsetToNode.search([offset, offset]);
+    if (matches.length === 0) {
+      return null;
+    }
+    assert(matches.length === 1);
+    return matches[0];
+  }
+
+}
+
+function configureConnection(connection: Connection) {
 
   const workspaceFolders = new FastStringMap<string, BoltWorkspaceFolder>()
+
+  const sourceFiles = new FastStringMap<string, SourceFileHandle>();
+  const checker = new TypeChecker();
 
   const documents = new TextDocuments(TextDocument);
 
@@ -67,6 +128,9 @@ function configureConnection(connection: IConnection) {
 
     const result: InitializeResult = {
       capabilities: {
+        hoverProvider: {
+          workDoneProgress: false
+        },
         textDocumentSync: TextDocumentSyncKind.Incremental,
       }
     }
@@ -137,8 +201,49 @@ function configureConnection(connection: IConnection) {
         throw e;
       }
     }
+    sourceFiles.set(document.uri, new SourceFileHandle(document.getText(), sourceFile));
     connection.sendDiagnostics({ uri: document.uri, diagnostics })
   }
+
+  connection.onHover(params => {
+
+    if (!sourceFiles.has(params.textDocument.uri)) {
+      return null;
+    }
+
+    const sourceFileHandle = sourceFiles.get(params.textDocument.uri);
+    const offset = sourceFileHandle.getOffset({
+      line: params.position.line,
+      column: params.position.character
+    })
+
+    if (offset === null) {
+      return null;
+    }
+
+    const node = sourceFileHandle.getNodeAtOffset(offset);
+
+    if (node === null) {
+      return null;
+    }
+
+    const nodeType = checker.getTypeOfNode(node);
+
+    if (nodeType === null) {
+      return null;
+    }
+
+    console.log(nodeType.format());
+
+    return {
+      contents: nodeType.format(),
+      range: {
+        start: { line: node.span!.start.line-1, character: node.span!.start.column-1  },
+        end: { line: node.span!.end.line-1, character: node.span!.end.column-1 }
+      },
+    }
+
+  })
 
   documents.listen(connection)
 
