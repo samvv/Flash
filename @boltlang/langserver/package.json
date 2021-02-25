@@ -27,8 +27,14 @@
   },
   "homepage": "https://github.com/BoltLang/BoltJS#readme",
   "dependencies": {
+    "@flatten-js/interval-tree": "^1.0.13",
     "minimist": "^1.2.5",
     "vscode-languageserver": "^6.1.1",
     "vscode-languageserver-textdocument": "^1.0.1"
+  },
+  "devDependencies": {
+    "@types/minimist": "^1.2.1",
+    "webpack": "^5.24.2",
+    "webpack-cli": "^4.5.0"
   }
 }
