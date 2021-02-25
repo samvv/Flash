@@ -1,5 +1,5 @@
 
-const path  =require('path');
+const path = require('path');
 const webpack = require('webpack');
 
 module.exports = {
@@ -11,6 +11,9 @@ module.exports = {
     filename: 'bin/[name].js',
     path: path.resolve(__dirname),
     devtoolModuleFilenameTemplate: '[absolute-resource-path]'
+  },
+  externals: {
+    '@bolt/compiler': path.resolve(__dirname, '..', 'compiler'),
   },
   resolve: {
     extensions: [".ts", ".js"],
