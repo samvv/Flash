@@ -6,12 +6,10 @@
   "workspaces": [
     "@boltlang/compiler",
     "@boltlang/langserver",
-    "@boltlang/cli",
-    "vscode-extension"
+    "@boltlang/cli"
   ],
   "scripts": {
-    "test": "concurrently --names compiler 'cd @boltlang/compiler && npm test'",
-    "watch": "concurrently --names compiler,langserver,cli,vscode 'cd @boltlang/compiler && npm run watch' 'cd @boltlang/langserver && npm run watch' 'cd @boltlang/cli && npm run watch' 'cd vscode-extension && npm run watch'"
+    "code": "code --extensionDevelopmentPath=\"$(pwd)/vscode-extension\""
   },
   "repository": {
     "type": "git",
@@ -24,16 +22,6 @@
   },
   "homepage": "https://github.com/samvv/BoltJS#readme",
   "devDependencies": {
-    "@babel/core": "^7.12.3",
-    "@babel/plugin-proposal-class-properties": "^7.12.1",
-    "@babel/preset-env": "^7.12.1",
-    "@types/node": "^14.14.7",
-    "ava": "^3.13.0",
-    "babel-loader": "^8.2.1",
-    "concurrently": "^5.3.0",
-    "ts-loader": "^8.0.11",
-    "typescript": "^4.0.5",
-    "webpack": "^5.4.0",
-    "webpack-cli": "^4.2.0"
+    "@samvv/bake": "^0.1.4"
   }
 }
