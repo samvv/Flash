@@ -16,13 +16,22 @@ import {
 import IntervalTree from "@flatten-js/interval-tree"
 import { TextDocument } from "vscode-languageserver-textdocument";
 
-import { createTokenStream, ParseError, ScanError } from "@boltlang/compiler/common";
-import { Parser } from "@boltlang/compiler/parser";
-import { Scanner } from "@boltlang/compiler/scanner";
-import { TextFile, TextSpan } from "@boltlang/compiler/text";
-import { assert, FastStringMap } from "@boltlang/compiler/util";
-import { isBoltReferenceExpression, isBoltToken, SourceFile, Syntax } from "@boltlang/compiler/ast";
-import { TypeChecker } from "@boltlang/compiler/checker";
+import {
+  Parser,
+  Scanner,
+  TextFile,
+  TextSpan,
+  createTokenStream,
+  ParseError,
+  ScanError,
+  assert,
+  FastStringMap,
+  TypeChecker,
+  isBoltReferenceExpression,
+  isBoltToken,
+  SourceFile,
+  Syntax
+} from "@boltlang/compiler";
 
 interface TextPositionLike {
   line: number;
