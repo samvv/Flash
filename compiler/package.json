@@ -6,7 +6,7 @@
   "scripts": {
     "test": "ava",
     "prepare": "tsc || exit 0",
-    "watch": "tsc -w",
+    "watch": "tsc -w --preserveWatchOutput",
     "generate-ast": "tsastgen src/ast-spec.ts:src/ast.ts"
   },
   "author": "Sam Vervaeck <vervaeck.sam@skynet.be>",
