@@ -1,5 +1,5 @@
 
-import { BoltBindPattern, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
+import { BoltBindPattern, isBoltBlockExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
 import { getSymbolText } from "./common";
 import { assert, FastStringMap } from "./util";
 
@@ -279,13 +279,31 @@ function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
   return substitution
 }
 
+function getNodeIntroducingScope(node: Syntax) {
+  let currNode: Syntax | null = node;
+  while (true) {
+    if (isBoltSourceFile(currNode)
+    || isBoltBlockExpression(currNode)
+    || isBoltFunctionDeclaration(currNode)
+    || (isBoltFunctionExpression(currNode) && currNode.body !== null)) {
+      return currNode;
+    }
+    if (currNode!.parentNode === null) {
+      return currNode;
+    }
+    currNode = currNode!.parentNode;
+  }
+}
+
 export class TypeChecker {
 
-  private nextVarId = 1;
   private nextPrimTypeId = 1;
 
   private intType = this.createPrimType('int');
   private stringType = this.createPrimType('String');
+  private boolType = this.createPrimType('bool');
+
+  private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
 
   public isIntType(type: Type) {
     return type === this.intType;
@@ -297,7 +315,8 @@ export class TypeChecker {
 
   private builtinTypes = new FastStringMap<string, Type>([
     ['int', this.intType],
-    ['String', this.stringType]
+    ['String', this.stringType],
+    ['bool', this.boolType]
   ]);
 
   private createPrimType(name: string): PrimType {
@@ -305,7 +324,11 @@ export class TypeChecker {
   }
 
   public registerSourceFile(sourceFile: SourceFile): void {
-    
+    const typeEnv = new TypeEnv();
+    for (const element of sourceFile.elements) {
+      this.checkNode(element, typeEnv);
+    }
+    this.nodeToTypeEnv.set(sourceFile.id, typeEnv);
   }
 
   private applySubstitutionToConstraints(constraints: Constraint[], substitution: TypeVarSubstitution): void {
@@ -320,12 +343,25 @@ export class TypeChecker {
 
     switch (node.kind) {
 
+      case SyntaxKind.BoltVariableDeclaration:
+      {
+        const x = (node.bindings as BoltBindPattern).name.text;
+        const localConstraints = [...constraints];
+        const unsolvedType = this.inferNode(node.value!, env, localConstraints);
+        const substitution = this.solveConstraints(localConstraints);
+        const type = unsolvedType.applySubstitution(substitution);
+        env.set(x, new ForallScheme([], unsolvedType));
+        return type;
+      }
+
       case SyntaxKind.BoltConstantExpression:
       {
         if (typeof(node.value) === 'bigint') {
           return this.intType;
         } else if (typeof(node.value === 'string')) {
           return this.stringType;
+        } else if (typeof(node.value) === 'boolean') {
+          return this.boolType;
         } else {
           throw new Error(`Could not infer type of BoltConstantExpression`)
         }
@@ -337,7 +373,16 @@ export class TypeChecker {
         if (text === '+') {
           return new ArrowType([ this.intType, this.intType ], this.intType);
         }
-        const type = env.lookup(text)
+        if (text === '-') {
+          return new ArrowType([ this.intType, this.intType ], this.intType);
+        }
+        if (text === '-') {
+          return new ArrowType([ this.intType, this.intType ], this.intType);
+        }
+        if (text === '*') {
+          return new ArrowType([ this.intType, this.intType ], this.intType);
+        }
+        const type = env.lookup(text);
         assert(type !== null);
         return type!;
       }
@@ -382,8 +427,15 @@ export class TypeChecker {
 
   }
 
-  public checkNode(node: Syntax): void {
-
+  public checkNode(node: Syntax, typeEnv: TypeEnv): void {
+    switch (node.kind) {
+      case SyntaxKind.BoltExpressionStatement:
+        this.inferNode(node.expression, typeEnv, []);
+        break;
+      case SyntaxKind.BoltVariableDeclaration:
+        this.inferNode(node, typeEnv, []);
+        break;
+    }
   }
 
   private solveConstraints(constraints: Constraint[]) {
@@ -456,9 +508,22 @@ export class TypeChecker {
     throw new Error(`Types ${a.format()} and ${b.format()} could not be unified`)
   }
 
-  public getTypeOfNode(node: Syntax, env: TypeEnv = new TypeEnv()): Type {
+  private getTypeEnvForNode(node: Syntax): TypeEnv {
+    const scopeNode = getNodeIntroducingScope(node)
+    if (this.nodeToTypeEnv.has(scopeNode.id)) {
+      return this.nodeToTypeEnv.get(scopeNode.id)
+    }
+    const newTypeEnv = new TypeEnv();
+    this.nodeToTypeEnv.set(scopeNode.id, newTypeEnv)
+    return newTypeEnv;
+  }
+
+  public getTypeOfNode(node: Syntax, typeEnv?: TypeEnv): Type {
+    if (typeEnv === undefined) {
+      typeEnv = this.getTypeEnvForNode(node);
+    }
     const constraints: Constraint[] = [];
-    const type = this.inferNode(node, env, constraints);
+    const type = this.inferNode(node, typeEnv, constraints);
     const substitution = this.solveConstraints(constraints);
     return type.applySubstitution(substitution);
   }
