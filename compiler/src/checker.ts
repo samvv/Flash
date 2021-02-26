@@ -462,12 +462,18 @@ export class TypeChecker {
     }
   }
 
-  private inferBinding(node: BoltPattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
+  private inferBinding(
+    node: BoltPattern,
+    valueType: Type,
+    typeEnv: TypeEnv,
+    constraints: Constraint[],
+    shouldGeneralize: boolean
+  ) {
     switch (node.kind) {
       case SyntaxKind.BoltBindPattern:
         {
           const varName = node.name.text;
-          typeEnv.set(varName, new ForallScheme(new TypeVarSet(), valueType));
+          typeEnv.set(varName, shouldGeneralize ? generalizeType(valueType, typeEnv) : new ForallScheme(new TypeVarSet(), valueType));
           break;
         }
       default:
@@ -512,7 +518,6 @@ export class TypeChecker {
       case SyntaxKind.BoltVariableDeclaration:
       {
 
-        const varName = (node.bindings as BoltBindPattern).name.text;
         let resultType: Type;
 
         if (node.modifiers & BoltModifiers.IsMutable) {
@@ -540,7 +545,7 @@ export class TypeChecker {
           // problems in the case we assign an expression of a different type
           // to the variable. The assignment would be accepted, while it really
           // shouldn't.
-          typeEnv.set(varName, new ForallScheme(new TypeVarSet(), typeVar));
+          this.inferBinding(node.bindings, typeVar, typeEnv, constraints, false);
 
           resultType = typeVar;
 
@@ -554,7 +559,7 @@ export class TypeChecker {
 
           resultType = this.inferNode(node.value!, typeEnv, constraints);
 
-          typeEnv.set(varName, generalizeType(resultType, typeEnv));
+          this.inferBinding(node.bindings, resultType, typeEnv, constraints, true);
         }
 
         return resultType;
@@ -661,15 +666,6 @@ export class TypeChecker {
             constraints
           );
           return this.voidType;
-          //const varName = (node.lhs as BoltBindPattern).name.text;
-          //const lhsType = typeEnv.lookup(varName);
-          //if (lhsType === null) {
-          //  throw new BindingNotFoundError(node, varName)
-          //}
-          //const rhsType = this.getTypeOfNode(node.rhs, typeEnv);
-          //const subst = this.solveConstraints([[ lhsType, rhsType ]]);
-          //typeEnv.remove(varName);
-          //typeEnv.set(varName, new ForallScheme(new TypeVarSet(), lhsType.applySubstitution(subst)));
         }
 
       default:
