@@ -1,11 +1,7 @@
 
-import { throws } from "assert";
-import { kMaxLength } from "buffer";
-import { assert, timeStamp } from "console";
-import { BoltBindPattern, BoltIdentifier, isJSTryCatchStatement, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
+import { BoltBindPattern, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
 import { getSymbolText } from "./common";
-import { E_TYPE_DECLARATION_NOT_FOUND } from "./diagnostics";
-import { FastStringMap, pushAll } from "./util";
+import { assert, FastStringMap } from "./util";
 
 enum TypeKind {
   TypeVar,
@@ -202,10 +198,6 @@ class TypeVarSubstitution {
 
 const emptyTypeVarSubstitution = new TypeVarSubstitution();
 
-enum SchemeType {
-  Forall,
-}
-
 class ForallScheme {
 
   private typeVarIds = new Set<string>();
@@ -236,8 +228,6 @@ type Scheme
   = ForallScheme
 
 type Constraint = [Type, Type]
-
-type InferResult = [Type, Array<Constraint>]
 
 export class TypeEnv {
 
