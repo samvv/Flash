@@ -1,8 +1,9 @@
 
 import test from "ava";
+import { Type } from "js-yaml";
 import { BoltExpressionStatement, createBoltConstantExpression, setParents } from "../ast";
 
-import { TypeChecker } from "../checker"
+import { BindingNotFoundError, TypeChecker, TypeCheckError, UnificationError } from "../checker"
 import { createTokenStream } from "../common";
 import { Parser } from "../parser";
 
@@ -82,10 +83,12 @@ a;
   t.assert(checker.isIntType(type));
 });
 
-test('repeated uses of the same variable does not change its type', t => {
+test('repeated uses of the same variable works without error', t => {
   const sourceFile = parseSourceFile(`
 let a = 1;
 a;
+a + 1;
+1 + a;
 a + a;
 `)
   const checker = new TypeChecker();
@@ -94,4 +97,44 @@ a + a;
   t.assert(checker.isIntType(type1));
   const type2 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(type2));
+  const type3 = checker.getTypeOfNode((sourceFile.elements[3] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(type3));
+  const type4 = checker.getTypeOfNode((sourceFile.elements[4] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(type4));
+});
+
+test('the identity function is polymorphic in its arguments', t => {
+  const sourceFile = parseSourceFile(`
+let id = |x| x;
+id(1);
+id("foo");
+`);
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  const type1 = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(type1));
+  const type2 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
+  t.assert(checker.isStringType(type2));
+});
+
+test('a reference to a binding that does not exist is caught as an error', t => {
+  const sourceFile = parseSourceFile(`x;`)
+  const checker = new TypeChecker();
+  const error = t.throws(() => {
+    checker.registerSourceFile(sourceFile);
+  });
+  t.assert(error instanceof BindingNotFoundError);
+})
+
+test('a variable is correctly checked for invalid assignments', t => {
+  const sourceFile = parseSourceFile(`
+let mut a: int;
+a = 1;
+a = "foo";
+`)
+  const checker = new TypeChecker();
+  const error = t.throws(() => {
+    checker.registerSourceFile(sourceFile)
+  }) as UnificationError;
+  t.assert(error instanceof UnificationError);
 });
