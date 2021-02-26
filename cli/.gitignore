@@ -3,5 +3,6 @@
 node_modules/
 
 # resulting code
-/bin/
+/lib/
 
+tsconfig.tsbuildinfo

@@ -8,6 +8,4 @@ node_modules/
 # bolt
 .bolt-work/
 
-# compiled code for testin
-/lib/
-
+tsconfig.tsbuildinfo

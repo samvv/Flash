@@ -1,10 +1,6 @@
 
-# all compiled files except a few
-*.js
-*.js.map
-*.d.ts
-*.d.ts.map
-!/webpack.config.js
+# build files
+tsconfig.tsbuildinfo
 
 # npm
 node_modules/

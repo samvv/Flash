@@ -9,6 +9,7 @@
     "cli"
   ],
   "scripts": {
+    "webpack": "webpack --mode development --watch",
     "code": "code --extensionDevelopmentPath=\"$(pwd)/vscode-extension\""
   },
   "repository": {

@@ -1,7 +1,10 @@
 
+# build files
+tsconfig.tsbuildinfo
+
 # npm
 node_modules/
 
 # resulting code
-/bin/
+/lib/
 

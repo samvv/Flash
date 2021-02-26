@@ -1,12 +1,23 @@
 {
   "compilerOptions": {
+    "composite": true,
     "target": "ES2019",
     "module": "commonjs",
     "sourceMap": true,
-    "noEmit": true,
+    "outDir": "./lib",
+    "rootDir": "src",
     "strict": true,
+    "paths": {
+      "@boltlang/compiler": [ "../compiler" ]
+    },
+    "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
-  }
+  },
+  "references": [
+    { "path": "../compiler" }
+  ],
+  "include": ["src"],
+  "exclude": ["node_modules"]
 }

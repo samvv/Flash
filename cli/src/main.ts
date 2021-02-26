@@ -1,11 +1,11 @@
+#!/usr/bin/env node
 
 import "reflect-metadata"
 import "source-map-support/register"
 
 import yargs from "yargs"
 
-import { Frontend } from "@boltlang/compiler/frontend"
-import { expandPath } from "@boltlang/compiler/util"
+import { Frontend, expandPath } from "@boltlang/compiler"
 
 const BOLT_HOME = expandPath(process.env['BOLT_HOME'] ?? '~/.bolt-compiler')
 
@@ -110,7 +110,7 @@ yargs
         }
         frontend.compile(program, args.target);
       }
-      
+
     })
 
   .command(
@@ -163,7 +163,5 @@ yargs
   )
 
   .demandCommand()
-  .help()
-  .version()
   .argv
 

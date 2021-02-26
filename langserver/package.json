@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "description": "An implementation of the Language Server Protocol for the Bolt programming language",
   "bin": {
-    "bolt-langserver": "bin/bolt-langserver.js"
+    "bolt-langserver": "lib/main.js"
   },
   "scripts": {
-    "prepare": "webpack --mode production",
-    "watch": "webpack --mode development --watch",
+    "prepare": "tsc",
+    "watch": "tsc -w --preserveWatchOutput",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -34,13 +34,7 @@
     "vscode-languageserver-textdocument": "^1.0.1"
   },
   "devDependencies": {
-    "@babel/core": "^7.13.1",
-    "@babel/plugin-proposal-class-properties": "^7.13.0",
-    "@babel/preset-env": "^7.13.5",
-    "@babel/preset-typescript": "^7.13.0",
     "@types/minimist": "^1.2.1",
-    "babel-loader": "^8.2.2",
-    "webpack": "^5.24.2",
-    "webpack-cli": "^4.5.0"
+    "typescript": "^4.2.2"
   }
 }
