@@ -23,13 +23,13 @@
             "name": "Launch Language Server",
             "request": "launch",
             "type": "node",
-            "program": "${workspaceFolder}/@boltlang/langserver/src/main.ts",
+            "program": "${workspaceFolder}/langserver/src/main.ts",
             "args": [
                 "--socket=1234"
             ],
             "sourceMaps": true,
             "outFiles": [
-                "${workspaceFolder}/@boltlang/langserver/bin/bolt-langserver.js"
+                "${workspaceFolder}/langserver/bin/bolt-langserver.js"
             ],
             "skipFiles": [
                 "${workspaceFolder}/node_modules/**/*.js",
@@ -42,14 +42,14 @@
             "request": "launch",
             "sourceMaps": true,
             "outFiles": [
-                "${workspaceFolder}/@boltlang/compiler/**/*.js"
+                "${workspaceFolder}/compiler/**/*.js"
             ],
             "outputCapture": "std",
             "skipFiles": [
                 "**/node_modules"
             ],
             "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ava",
-            "cwd": "${workspaceFolder}/@boltlang/compiler"
+            "cwd": "${workspaceFolder}/compiler"
         },
         {
             "name": "Run Compiler on Test File",
@@ -57,14 +57,14 @@
             "request": "launch",
             "sourceMaps": true,
             "outFiles": [
-                "${workspaceFolder}/@boltlang/cli/bin/*.js"
+                "${workspaceFolder}/cli/bin/*.js"
             ],
             "outputCapture": "std",
             "skipFiles": [
                 "${workspaceFolder}/node_modules/**/*.js",
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/@boltlang/cli/src/main.ts",
+            "program": "${workspaceFolder}/cli/src/main.ts",
             "args": [
                 "check",
                 "test.bolt",
