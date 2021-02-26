@@ -1,0 +1,84 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run VSCode Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}/vscode-extension"
+            ],
+            "env": {
+                "VSCODE_BOLT_LANGUAGE_SERVER_PORT": "1234"
+            },
+            "outFiles": [
+                "${workspaceFolder}/vscode-extension/dist/**/*.js"
+            ],
+            "skipFiles": [
+                "${workspaceFolder}/node_modules/**/*.js"
+            ],
+            "sourceMaps": true
+        },
+        {
+            "name": "Launch Language Server",
+            "request": "launch",
+            "type": "node",
+            "program": "${workspaceFolder}/@boltlang/langserver/src/main.ts",
+            "args": [
+                "--socket=1234"
+            ],
+            "sourceMaps": true,
+            "outFiles": [
+                "${workspaceFolder}/@boltlang/langserver/bin/bolt-langserver.js"
+            ],
+            "skipFiles": [
+                "${workspaceFolder}/node_modules/**/*.js",
+                "<node_internals>/**"
+            ]
+        },
+        {
+            "name": "Run Compiler Unit Tests",
+            "type": "node",
+            "request": "launch",
+            "sourceMaps": true,
+            "outFiles": [
+                "${workspaceFolder}/@boltlang/compiler/**/*.js"
+            ],
+            "outputCapture": "std",
+            "skipFiles": [
+                "**/node_modules"
+            ],
+            "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ava",
+            "cwd": "${workspaceFolder}/@boltlang/compiler"
+        },
+        {
+            "name": "Run Compiler on Test File",
+            "type": "node",
+            "request": "launch",
+            "sourceMaps": true,
+            "outFiles": [
+                "${workspaceFolder}/@boltlang/cli/bin/*.js"
+            ],
+            "outputCapture": "std",
+            "skipFiles": [
+                "${workspaceFolder}/node_modules/**/*.js",
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/@boltlang/cli/src/main.ts",
+            "args": [
+                "check",
+                "test.bolt",
+                "--no-std"
+            ]
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Run VScode Extension With Custom Language Server",
+            "configurations": [
+                "Launch Language Server",
+                "Run VSCode Extension"
+            ]
+        }
+    ]
+}
