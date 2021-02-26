@@ -1,6 +1,6 @@
 
-import { BoltBindPattern, isBoltBlockExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
-import { Syntax } from "./ast-spec";
+import { lookup } from "dns";
+import { BoltBindPattern, BoltModifiers, BoltPattern, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
 import { getSymbolText } from "./common";
 import { assert, FastStringMap } from "./util";
 
@@ -8,12 +8,14 @@ enum TypeKind {
   TypeVar,
   PrimType,
   ArrowType,
+  TupleType,
 }
 
 type Type
   = TypeVar
   | PrimType
   | ArrowType
+  | TupleType
 
 interface TypeBase {
   kind: TypeKind;
@@ -40,7 +42,7 @@ class TypeVar implements TypeBase {
 
   public varId: string;
 
-  constructor(public hint?: string) {
+  constructor(hint?: string) {
     this.varId = generateTypeVarId(hint);
   }
 
@@ -62,9 +64,35 @@ class TypeVar implements TypeBase {
 
 }
 
+class TupleType implements TypeBase {
+
+  public readonly kind = TypeKind.TupleType;
+
+  constructor(public elements: Type[]) {
+
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    return this.elements.some(type => type.hasTypeVariable(typeVar))
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Type {
+    return new TupleType(
+      this.elements.map(type => type.applySubstitution(substitution))
+    )
+  }
+
+  public format(): string {
+    return '(' + this.elements
+      .map(type => type.format())
+      .join(', ') + ')';
+  }
+
+}
+
 class PrimType implements TypeBase {
 
-  public readonly kind: TypeKind.PrimType = TypeKind.PrimType;
+  public readonly kind = TypeKind.PrimType;
 
   constructor(
     public primId: number,
@@ -277,10 +305,17 @@ export class TypeEnv {
   }
 
   public lookup(name: string): Type | null {
+
+    // Check if the binding exists. It's the caller's responsibility to so
+    // something sensible if the binding was not found.
     if (!this.mapping.has(name)) {
       return null;
     }
+
     const scheme = this.mapping.get(name);
+
+    // Now we instantiate the type inside the scheme with some fresh variables
+    // that are guaranteed to not occur anywhere else.
     const freshVars = new TypeVarSubstitution();
     for (const typeVar of scheme.typeVars) {
       freshVars.add(typeVar, new TypeVar())
@@ -383,6 +418,7 @@ export class TypeChecker {
   private intType = this.createPrimType('int');
   private stringType = this.createPrimType('String');
   private boolType = this.createPrimType('bool');
+  private voidType = new TupleType([]);
 
   private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
 
@@ -405,11 +441,11 @@ export class TypeChecker {
   }
 
   public registerSourceFile(sourceFile: SourceFile): void {
-    const typeEnv = new TypeEnv();
-    for (const element of sourceFile.elements) {
-      this.checkNode(element, typeEnv);
-    }
-    this.nodeToTypeEnv.set(sourceFile.id, typeEnv);
+    const newTypeEnv = new TypeEnv();
+    this.nodeToTypeEnv.set(sourceFile.id, newTypeEnv)
+    const constraints: Constraint[] = [];
+    this.checkNode(sourceFile, newTypeEnv, constraints);
+    this.solveConstraints(constraints);
   }
 
   private applySubstitutionToConstraints(constraints: Constraint[], substitution: TypeVarSubstitution): void {
@@ -420,14 +456,36 @@ export class TypeChecker {
     }
   }
 
-  private visitBinding(node: BoltBindPattern, type: Type, typeEnv: TypeEnv) {
+  private inferBinding(node: BoltPattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
     switch (node.kind) {
       case SyntaxKind.BoltBindPattern:
         {
           const varName = node.name.text;
-          typeEnv.set(varName, new ForallScheme([], type));
+          typeEnv.set(varName, new ForallScheme(new TypeVarSet(), valueType));
           break;
         }
+      default:
+        throw new Error(`Could not infer constraints from pattern in binding: unknown node type`);
+    }
+  }
+
+  private inferAssignment(node: BoltPattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
+    switch (node.kind) {
+      case SyntaxKind.BoltBindPattern:
+      {
+        const varName = node.name.text;
+        const varType = typeEnv.lookup(varName);
+        if (varType === null) {
+          throw new BindingNotFoundError(node, varName);
+        }
+        constraints.push([
+          varType,
+          valueType,
+        ])
+        break;
+      }
+      default:
+        throw new Error(`Could not infer constraints from pattern in assignment: unknown node type`);
     }
   }
 
@@ -447,20 +505,56 @@ export class TypeChecker {
 
       case SyntaxKind.BoltVariableDeclaration:
       {
+
         const varName = (node.bindings as BoltBindPattern).name.text;
-        const localConstraints = [...constraints];
-        const typeVar = new TypeVar();
-        if (node.typeExpr !== null) {
-          const typeExprType = this.inferNode(node.typeExpr, typeEnv, localConstraints);
-          localConstraints.push([ typeVar, typeExprType ]);
+        let resultType: Type;
+
+        if (node.modifiers & BoltModifiers.IsMutable) {
+
+          // We will connect all relevant types to this type variable, so that
+          // the unifier can solve them.
+          const typeVar = new TypeVar();
+
+          // A type assertion should just add the required constraints to the
+          // list and bind whatever type that comes out of it with our type
+          // variable.
+          if (node.typeExpr !== null) {
+            const typeExprType = this.inferNode(node.typeExpr, typeEnv, constraints);
+            constraints.push([ typeVar, typeExprType ]);
+          }
+
+          // Similar to the type assertion above, but using the value
+          // expression if there was any.
+          if (node.value !== null) {
+            const valueType = this.inferNode(node.value, typeEnv, constraints);
+            constraints.push([ typeVar, valueType ])
+          }
+
+          //const substitution = this.solveConstraints([...constraints]);
+          //resultType = typeVar.applySubstitution(substitution);
+
+          // We don't generalize a mutable variable declaration. It causes
+          // problems in the case we assign an expression of a different type
+          // to the variable. The assignment would be accepted, while it really
+          // shouldn't.
+          typeEnv.set(varName, new ForallScheme(new TypeVarSet(), typeVar));
+
+          resultType = typeVar;
+
+        } else {
+
+          // It does not make sense to declare a read-only variable without a
+          // value associated with it.
+          if (node.value === null) {
+            throw new Error(`Immutable variable declaration '${varName}' was not assigned a value.`);
+          }
+
+          resultType = this.inferNode(node.value!, typeEnv, constraints);
+
+          typeEnv.set(varName, generalizeType(resultType, typeEnv));
         }
-        if (node.value !== null) {
-          const valueType = this.inferNode(node.value, typeEnv, localConstraints);
-          localConstraints.push([ typeVar, valueType ])
-        }
-        const substitution = this.solveConstraints(localConstraints);
-        const resultType = typeVar.applySubstitution(substitution);
-        typeEnv.set(varName, generalizeType(resultType, typeEnv));
+
+        console.log(`${varName} = ${resultType.format()}`);
         return resultType;
       }
 
@@ -501,36 +595,80 @@ export class TypeChecker {
 
       case SyntaxKind.BoltCallExpression:
       {
+        // This type variable will contain the type that the call expression resolves to.
+        const returnType = new TypeVar();
+
+        // First we build a type of the function that has been called. This
+        // type should eventually resolve to an ArrowType.
         const operatorType = this.inferNode(node.operator, typeEnv, constraints)
+
+        // Build a list of types that correspond to the parameters of the
+        // function being called.
         const operandTypes = [];
         for (const operand of node.operands) {
           const operandType = this.inferNode(operand, typeEnv, constraints);
           operandTypes.push(operandType)
         }
-        const returnType = new TypeVar();
+
+        // Now make sure that the signature built out of these parameter types
+        // actually match the function being called. They will be solved later
+        // by the unifier.
         constraints.push([
           operatorType,
           new ArrowType(operandTypes, returnType)
-        ])
+        ]);
+
         return returnType;
       }
 
       case SyntaxKind.BoltFunctionExpression:
       {
-        const tvs = [];
+
+        // Introduce a new scope by starting with a fresh environment.
         const newEnv = typeEnv.clone();
+
+        // Build the function's signature by going through its parameter types.
+        const paramTypes = [];
         for (const param of node.params) {
-          const tv = new TypeVar();
-          tvs.push(tv)
-          const x = (param.bindings as BoltBindPattern).name.text;
-          newEnv.set(x, new ForallScheme(new TypeVarSet(), tv))
+          const typeVar = new TypeVar();
+          paramTypes.push(typeVar);
+          this.inferBinding(param.bindings, typeVar, newEnv, constraints);
         }
-        const returnType = this.inferNode(node.expression!, newEnv, constraints);
+
+        // Whatever the function returns is eventually determined by its body.
+        let returnType: Type;
+        if (node.expression !== null) {
+         returnType = this.inferNode(node.expression!, newEnv, constraints); 
+        } else {
+          throw new Error(`Not supported yet.`)
+        }
+
         return new ArrowType(
-          tvs,
+          paramTypes,
           returnType
         );
+
       }
+
+      case SyntaxKind.BoltAssignStatement:
+        {
+          this.inferAssignment(
+            node.lhs,
+            this.inferNode(node.rhs, typeEnv, constraints),
+            typeEnv,
+            constraints
+          );
+          return this.voidType;
+          //const varName = (node.lhs as BoltBindPattern).name.text;
+          //const lhsType = typeEnv.lookup(varName);
+          //if (lhsType === null) {
+          //  throw new BindingNotFoundError(node, varName)
+          //}
+          //const rhsType = this.getTypeOfNode(node.rhs, typeEnv);
+          //const subst = this.solveConstraints([[ lhsType, rhsType ]]);
+          //typeEnv.remove(varName);
+          //typeEnv.set(varName, new ForallScheme(new TypeVarSet(), lhsType.applySubstitution(subst)));
+        }
 
       default:
         throw new Error(`Could not infer type of node ${kindToString(node.kind)}`)
@@ -539,26 +677,35 @@ export class TypeChecker {
 
   }
 
-  public checkNode(node: Syntax, typeEnv: TypeEnv): void {
+  public checkNode(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]): void {
+    if (isBoltExpression(node)) {
+      this.inferNode(node, typeEnv, constraints);
+    }
     switch (node.kind) {
-      case SyntaxKind.BoltExpressionStatement:
-        this.inferNode(node.expression, typeEnv, []);
+      case SyntaxKind.BoltSourceFile:
+        for (const element of node.elements) {
+          this.checkNode(element, typeEnv, constraints);
+        }
         break;
-      case SyntaxKind.BoltVariableDeclaration:
-        this.inferNode(node, typeEnv, []);
+      case SyntaxKind.BoltExpressionStatement:
+        this.checkNode(node.expression, typeEnv, constraints);
         break;
       case SyntaxKind.BoltAssignStatement:
-        const varName = (node.lhs as BoltBindPattern).name.text;
-        const lhsType = typeEnv.lookup(varName);
-        if (lhsType === null) {
-          throw new BindingNotFoundError(node, varName)
-        }
-        const rhsType = this.getTypeOfNode(node.rhs, typeEnv);
-        this.solveConstraints([[ lhsType, rhsType ]])
+      case SyntaxKind.BoltVariableDeclaration:
+        this.inferNode(node, typeEnv, constraints);
         break;
     }
   }
 
+  /**
+   * Solve all given constraints by running an unification algorithm on them.
+   *
+   * Be aware that the constraints might be mutated during this process. If you
+   * plan to process them after this method completed, make sure to clone them.
+   * 
+   * @param constraints A collection of constraints that will be consumed.
+   * 
+   */
   private solveConstraints(constraints: Constraint[]): TypeVarSubstitution {
     let substitution = new TypeVarSubstitution();
     while (true) {

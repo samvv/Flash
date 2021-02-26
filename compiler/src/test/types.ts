@@ -87,8 +87,8 @@ test('repeated uses of the same variable works without error', t => {
   const sourceFile = parseSourceFile(`
 let a = 1;
 a;
-a + 1;
-1 + a;
+a + 2;
+3 + a;
 a + a;
 `)
   const checker = new TypeChecker();
@@ -103,7 +103,7 @@ a + a;
   t.assert(checker.isIntType(type4));
 });
 
-test('the identity function is polymorphic in its arguments', t => {
+test('the identity function is polymorphic in its parameter', t => {
   const sourceFile = parseSourceFile(`
 let id = |x| x;
 id(1);
@@ -122,13 +122,40 @@ test('a reference to a binding that does not exist is caught as an error', t => 
   const checker = new TypeChecker();
   const error = t.throws(() => {
     checker.registerSourceFile(sourceFile);
-  });
+  }) as BindingNotFoundError;
   t.assert(error instanceof BindingNotFoundError);
+  t.assert(error.varName === 'x');
 })
 
 test('a variable is correctly checked for invalid assignments', t => {
   const sourceFile = parseSourceFile(`
 let mut a: int;
+a = "foo";
+`)
+  const checker = new TypeChecker();
+  const error = t.throws(() => {
+    checker.registerSourceFile(sourceFile)
+  }) as UnificationError;
+  t.assert(error instanceof UnificationError);
+  t.assert(checker.isStringType(error.left));
+  t.assert(checker.isIntType(error.right));
+});
+
+test('a variable that is not declared mutable cannot be assigned', t => {
+const sourceFile = parseSourceFile(`
+let a;
+a = 1;
+`);
+  const checker = new TypeChecker();
+  const error = t.throws(() => {
+    checker.registerSourceFile(sourceFile)
+  });
+  console.log(error);
+});
+
+test('an untyped variable will take the first assignment as its type', t => {
+  const sourceFile = parseSourceFile(`
+let mut a;
 a = 1;
 a = "foo";
 `)
@@ -137,4 +164,6 @@ a = "foo";
     checker.registerSourceFile(sourceFile)
   }) as UnificationError;
   t.assert(error instanceof UnificationError);
+  t.assert(checker.isStringType(error.left));
+  t.assert(checker.isIntType(error.right));
 });
