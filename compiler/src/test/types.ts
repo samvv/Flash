@@ -3,7 +3,7 @@ import test from "ava";
 import { Type } from "js-yaml";
 import { BoltExpressionStatement, createBoltConstantExpression, setParents } from "../ast";
 
-import { BindingNotFoundError, TypeChecker, TypeCheckError, UnificationError } from "../checker"
+import { BindingNotFoundError, TypeChecker, TypeCheckError, UnificationError, UninitializedBindingError } from "../checker"
 import { createTokenStream } from "../common";
 import { Parser } from "../parser";
 
@@ -150,7 +150,7 @@ a = 1;
   const error = t.throws(() => {
     checker.registerSourceFile(sourceFile)
   });
-  console.log(error);
+  t.assert(error instanceof UninitializedBindingError);
 });
 
 test('an untyped variable will take the first assignment as its type', t => {

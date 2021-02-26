@@ -1,6 +1,6 @@
 
 import { lookup } from "dns";
-import { BoltBindPattern, BoltModifiers, BoltPattern, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
+import { BoltBindPattern, BoltModifiers, BoltPattern, BoltVariableDeclaration, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
 import { getSymbolText } from "./common";
 import { assert, FastStringMap } from "./util";
 
@@ -411,6 +411,12 @@ export class BindingNotFoundError extends TypeCheckError {
   }
 }
 
+export class UninitializedBindingError extends TypeCheckError {
+  constructor(public node: BoltVariableDeclaration) {
+    super(`Immutable variable declaration was not assigned a value.`);
+  }
+}
+
 export class TypeChecker {
 
   private nextPrimTypeId = 1;
@@ -530,9 +536,6 @@ export class TypeChecker {
             constraints.push([ typeVar, valueType ])
           }
 
-          //const substitution = this.solveConstraints([...constraints]);
-          //resultType = typeVar.applySubstitution(substitution);
-
           // We don't generalize a mutable variable declaration. It causes
           // problems in the case we assign an expression of a different type
           // to the variable. The assignment would be accepted, while it really
@@ -546,7 +549,7 @@ export class TypeChecker {
           // It does not make sense to declare a read-only variable without a
           // value associated with it.
           if (node.value === null) {
-            throw new Error(`Immutable variable declaration '${varName}' was not assigned a value.`);
+            throw new UninitializedBindingError(node);
           }
 
           resultType = this.inferNode(node.value!, typeEnv, constraints);
@@ -554,7 +557,6 @@ export class TypeChecker {
           typeEnv.set(varName, generalizeType(resultType, typeEnv));
         }
 
-        console.log(`${varName} = ${resultType.format()}`);
         return resultType;
       }
 
