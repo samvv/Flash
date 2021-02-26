@@ -5,7 +5,6 @@ import { Package } from "./package"
 import { Diagnostic } from "./diagnostics";
 import { serializeTag, inspectTag, indent } from "./util";
 import { InspectOptionsStylized, inspect } from "util";
-import { Type } from "./checker"
 
 let nextNodeId = 1;
 
@@ -18,8 +17,6 @@ enum NodeFlags {
   HasTypeError = 1,
 }
 
-declare function isSourceFile(node: Syntax): boolean;
-
 export abstract class Syntax {
 
   public id: number;
@@ -27,8 +24,6 @@ export abstract class Syntax {
   private flags = NodeFlags.None;
 
   public errors: Diagnostic[] = [];
-
-  public type: Type;
 
   public hasTypeError() {
     return (this.flags & NodeFlags.HasTypeError) > 0;
@@ -113,7 +108,7 @@ export abstract class Syntax {
       if (isSourceFile(currNode)) {
         return currNode;
       }
-      currNode = currNode.parentNode;
+      currNode = currNode!.parentNode;
     } while (currNode !== null);
     throw new Error(`Could not get a source file for node ${this.kind}`);
   }
@@ -194,7 +189,7 @@ export interface BoltVBar      extends BoltToken, BoltOperatorLike {}
 
 export interface BoltKeyword {}
 
-export interface BoltElseKeyword      extends BoltToken, BoltKeyword {}
+export interface BoltElseKeyword    extends BoltToken, BoltKeyword {}
 export interface BoltIfKeyword      extends BoltToken, BoltKeyword {}
 export interface BoltWhereKeyword   extends BoltToken, BoltKeyword {}
 export interface BoltQuoteKeyword   extends BoltToken, BoltKeyword {}
@@ -691,7 +686,7 @@ export interface JSImportAsBinding extends JSImportBinding {
   local: JSIdentifier | null,
 }
 
-// By exception, we alloww 'import ..'-statements to appear in foreign function bodies
+// By exception, we allow 'import ..'-statements to appear in foreign function bodies
 export interface JSImportDeclaration extends JSDeclaration, JSFunctionBodyElement {
   bindings: JSImportBinding[],
   filename: JSString,

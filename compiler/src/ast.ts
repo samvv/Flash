@@ -10,8 +10,6 @@ import { serializeTag, inspectTag, indent } from "./util";
 
 import { InspectOptionsStylized, inspect } from "util";
 
-import { Type } from "./checker";
-
 let nextNodeId = 1;
 
 export type ResolveSyntaxKind<K extends SyntaxKind> = Extract<Syntax, {
@@ -23,13 +21,10 @@ enum NodeFlags {
     HasTypeError = 1
 }
 
-declare function isSourceFile(node: Syntax): boolean;
-
 export abstract class SyntaxBase {
     public id: number;
     private flags = NodeFlags.None;
     public errors: Diagnostic[] = [];
-    public type: Type;
     public hasTypeError() {
         return (this.flags & NodeFlags.HasTypeError) > 0;
     }
@@ -102,7 +97,7 @@ export abstract class SyntaxBase {
             if (isSourceFile(currNode)) {
                 return currNode;
             }
-            currNode = currNode.parentNode;
+            currNode = currNode!.parentNode;
         } while (currNode !== null);
         throw new Error(`Could not get a source file for node ${this.kind}`);
     }
