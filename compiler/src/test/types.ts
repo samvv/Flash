@@ -1,18 +1,16 @@
 
 import test from "ava";
-import { Type } from "js-yaml";
-import { BoltExpressionStatement, createBoltConstantExpression, setParents } from "../ast";
+import { BoltExpressionStatement, setParents } from "../ast";
 
-import { BindingNotFoundError, TypeChecker, TypeCheckError, UnificationError, UninitializedBindingError } from "../checker"
+import { BindingNotFoundError, TypeChecker, UnificationError, UninitializedBindingError } from "../checker"
 import { createTokenStream } from "../common";
 import { Parser } from "../parser";
 
-function parseExpr(input: string) {
-  const tokens = createTokenStream(input);
-  const parser = new Parser()
-  const node = parser.parseExpression(tokens);
-  setParents(node);
-  return node;
+function getTypeOfExpr(input: string) {
+  const sourceFile = parseSourceFile(input + ';');
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  return checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
 }
 
 function parseSourceFile(input: string) {
@@ -24,51 +22,58 @@ function parseSourceFile(input: string) {
 }
 
 test('an integer literal should resolve to the integer type', t => {
-  const expr = createBoltConstantExpression(BigInt(1));
+  const sourceFile = parseSourceFile('1;');
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType))
 });
 
 test('a string literal should resolve to the string type', t => {
-  const expr = createBoltConstantExpression('foo');
+  const sourceFile = parseSourceFile('"foo"');
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isStringType(exprType));
 })
 
 test('an addition is strongly typed', t => {
-  const expr = parseExpr('1 + 1');
+  const sourceFile = parseSourceFile('1 + 1;');
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr)
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType));
 })
 
 test('an application of the identity function with an integer should resolve to the integer type', t => {
-  const expr = parseExpr('(|x| x)(1)')
+  const sourceFile = parseSourceFile('(|x| x)(1);');
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType))
 });
 
 test('an application of an anonymous function returning an integer should resolve to the integer type', t => {
-  const expr = parseExpr('(| | 1)()')
+  const sourceFile = parseSourceFile('(| | 1)()')
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType))
 });
 
 test('an application of an anonymous function returning an integer should resolve to the integer type and ignore its arguments', t => {
-  const expr = parseExpr('(|x| 1)("foo")')
+  const sourceFile = parseSourceFile('(|x| 1)("foo")')
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType))
 });
 
 test('an application of a function using builtins should work', t => {
-  const expr = parseExpr('(|x, y| x + y)(1, 2)')
+  const sourceFile = parseSourceFile('(|x, y| x + y)(1, 2)')
   const checker = new TypeChecker();
-  const exprType = checker.getTypeOfNode(expr);
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(exprType))
 });
 
@@ -141,6 +146,20 @@ a = "foo";
   t.assert(checker.isIntType(error.right));
 });
 
+
+test('a variable may be reassigned different times with a value of the same type', t => {
+  const sourceFile = parseSourceFile(`
+let mut a;
+a = "foo";
+a = "bar";
+a = "baz";
+`)
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile)
+  const exprType = checker.getTypeOfNode((sourceFile.elements[0]);
+  t.assert(checker.isStringType(exprType));
+});
+
 test('a variable that is not declared mutable cannot be assigned', t => {
 const sourceFile = parseSourceFile(`
 let a;
@@ -167,3 +186,20 @@ a = "foo";
   t.assert(checker.isStringType(error.left));
   t.assert(checker.isIntType(error.right));
 });
+
+test('a recursive function calculating the factorial can be defined', t => {
+  const sourceFile = parseSourceFile(`
+fn fac(n: int) -> int {
+  return match n {
+    0 => 1,
+    n => n * fac(n-1),
+  }
+}
+
+fac(1);
+`)
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  const type = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(type));
+})

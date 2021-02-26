@@ -1,7 +1,6 @@
 
-import { lookup } from "dns";
-import { BoltBindPattern, BoltModifiers, BoltPattern, BoltVariableDeclaration, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
-import { getSymbolText } from "./common";
+import { BoltModifiers, BoltPattern, BoltVariableDeclaration, isBoltAssignStatement, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, isBoltVariableDeclaration, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
+import { getAllReturnStatementsInFunctionBody, getSymbolText } from "./common";
 import { assert, FastStringMap } from "./util";
 
 enum TypeKind {
@@ -267,7 +266,9 @@ class ForallScheme {
   public getFreeVariables(): TypeVarSet {
     const freeVariables = getFreeVariablesOfType(this.type);
     for (const typeVar of this.typeVars) {
-      freeVariables.delete(typeVar);
+      if (freeVariables.has(typeVar)) {
+        freeVariables.delete(typeVar);
+      }
     }
     return freeVariables;
   }
@@ -349,19 +350,29 @@ export class TypeEnv {
 
 function generalizeType(type: Type, typeEnv: TypeEnv): Scheme {
   const freeVariables = getFreeVariablesOfType(type);
-  for (const varName of typeEnv.getFreeVariables()) {
-    freeVariables.delete(varName)
+  for (const typeVar of typeEnv.getFreeVariables()) {
+    if (freeVariables.has(typeVar)) {
+      freeVariables.delete(typeVar)
+    }
   }
   return new ForallScheme(freeVariables, type);
 }
 
 function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
+
+  // Binding a type variable to itself means that we don't have to substitute
+  // anything.
   if (type.kind === TypeKind.TypeVar && type.varId === typeVar.varId) {
     return emptyTypeVarSubstitution;
   }
+
+  // This 'occurs check' ensures that a type variable is actually used. If it
+  // isn't used, bindTypeVar would do nothing and we are at risk of having an
+  // infinite loop in the unifier.
   if (type.hasTypeVariable(typeVar)) {
     throw new Error(`Type ${type.format()} has ${typeVar.format()} as an unbound free type variable.`);
   }
+
   const substitution = new TypeVarSubstitution();
   substitution.add(typeVar, type);
   return substitution
@@ -426,7 +437,9 @@ export class TypeChecker {
   private boolType = this.createPrimType('bool');
   private voidType = new TupleType([]);
 
+  private nodeToType = new FastStringMap<number, Type>();
   private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
+  private sourceFileToSubstitution = new FastStringMap<number, TypeVarSubstitution>();
 
   public isIntType(type: Type) {
     return type === this.intType;
@@ -451,7 +464,7 @@ export class TypeChecker {
     this.nodeToTypeEnv.set(sourceFile.id, newTypeEnv)
     const constraints: Constraint[] = [];
     this.checkNode(sourceFile, newTypeEnv, constraints);
-    this.solveConstraints(constraints);
+    this.sourceFileToSubstitution.set(sourceFile.id, this.solveConstraints(constraints));
   }
 
   private applySubstitutionToConstraints(constraints: Constraint[], substitution: TypeVarSubstitution): void {
@@ -470,6 +483,14 @@ export class TypeChecker {
     shouldGeneralize: boolean
   ) {
     switch (node.kind) {
+      case SyntaxKind.BoltExpressionPattern:
+        {
+          constraints.push([
+            valueType,
+            this.inferNode(node.expression, typeEnv, constraints)
+          ])
+          break;
+        }
       case SyntaxKind.BoltBindPattern:
         {
           const varName = node.name.text;
@@ -505,157 +526,215 @@ export class TypeChecker {
 
     switch (node.kind) {
 
-      case SyntaxKind.BoltReferenceTypeExpression:
-      {
-        assert(node.name.modulePath.length === 0);
-        const typeName = getSymbolText(node.name.name);
-        if (!this.builtinTypes.has(typeName)) {
-          throw new TypeNotFoundError(node, typeName);
+      case SyntaxKind.BoltMatchExpression:
+        {
+          const resultType = new TypeVar();
+          for (const matchArm of node.arms) {
+            const type = this.inferNode(matchArm.body, typeEnv, constraints);
+            // FIXME Should let-bindings generated in a match arm be generalised?
+            this.inferBinding(matchArm.pattern, type, typeEnv, constraints, false);
+            constraints.push([
+              type,
+              resultType
+            ])
+          }
+          return resultType;
         }
-        return this.builtinTypes.get(typeName);
-      }
+
+      case SyntaxKind.BoltReferenceTypeExpression:
+        {
+          assert(node.name.modulePath.length === 0);
+          const typeName = getSymbolText(node.name.name);
+          if (!this.builtinTypes.has(typeName)) {
+            throw new TypeNotFoundError(node, typeName);
+          }
+          return this.builtinTypes.get(typeName);
+        }
+
+      case SyntaxKind.BoltFunctionDeclaration:
+        {
+
+          const name = getSymbolText(node.name);
+
+          // This environment will be used inside the function body. It is created only once.
+          const innerTypeEnv = typeEnv.clone();
+
+          const paramTypes: Type[] = [];
+          for (const param of node.params) {
+            const typeVar = new TypeVar();
+            this.inferBinding(param.bindings, typeVar, innerTypeEnv, constraints, false);
+            paramTypes.push(typeVar);
+          }
+
+          const returnType = new TypeVar();
+          const fnType = new ArrowType(paramTypes, returnType);
+
+          // Register this function in the type environment it was presumably
+          // defined in. Currently, we must do this twice because there is no
+          // way to make one environment the 'parent' of another environment.
+          typeEnv.set(name, new ForallScheme(new TypeVarSet(), fnType));
+          innerTypeEnv.set(name, new ForallScheme(new TypeVarSet(), fnType));
+
+          if (node.returnTypeExpr !== null) {
+            constraints.push([
+              returnType,
+              this.inferNode(node.returnTypeExpr, typeEnv, constraints)
+            ]);
+          }
+
+          if (node.body !== null) {
+            for (const returnStmt of getAllReturnStatementsInFunctionBody(node.body)) {
+              constraints.push([
+                returnType,
+                returnStmt.value === null ? this.voidType : this.inferNode(returnStmt.value, innerTypeEnv, constraints)
+              ]);
+            }
+          }
+
+          return fnType;
+        }
 
       case SyntaxKind.BoltVariableDeclaration:
-      {
+        {
 
-        let resultType: Type;
+          let resultType: Type;
 
-        if (node.modifiers & BoltModifiers.IsMutable) {
+          if (node.modifiers & BoltModifiers.IsMutable) {
 
-          // We will connect all relevant types to this type variable, so that
-          // the unifier can solve them.
-          const typeVar = new TypeVar();
+            // We will connect all relevant types to this type variable, so that
+            // the unifier can solve them.
+            const typeVar = new TypeVar();
 
-          // A type assertion should just add the required constraints to the
-          // list and bind whatever type that comes out of it with our type
-          // variable.
-          if (node.typeExpr !== null) {
-            const typeExprType = this.inferNode(node.typeExpr, typeEnv, constraints);
-            constraints.push([ typeVar, typeExprType ]);
+            // A type assertion should just add the required constraints to the
+            // list and bind whatever type that comes out of it with our type
+            // variable.
+            if (node.typeExpr !== null) {
+              const typeExprType = this.inferNode(node.typeExpr, typeEnv, constraints);
+              constraints.push([ typeVar, typeExprType ]);
+            }
+
+            // Similar to the type assertion above, but using the value
+            // expression if there was any.
+            if (node.value !== null) {
+              const valueType = this.inferNode(node.value, typeEnv, constraints);
+              constraints.push([ typeVar, valueType ])
+            }
+
+            // We don't generalize a mutable variable declaration. It causes
+            // problems in the case we assign an expression of a different type
+            // to the variable. The assignment would be accepted, while it really
+            // shouldn't.
+            this.inferBinding(node.bindings, typeVar, typeEnv, constraints, false);
+
+            resultType = typeVar;
+
+          } else {
+
+            // It does not make sense to declare a read-only variable without a
+            // value associated with it.
+            if (node.value === null) {
+              throw new UninitializedBindingError(node);
+            }
+
+            resultType = this.inferNode(node.value!, typeEnv, constraints);
+
+            this.inferBinding(node.bindings, resultType, typeEnv, constraints, true);
           }
 
-          // Similar to the type assertion above, but using the value
-          // expression if there was any.
-          if (node.value !== null) {
-            const valueType = this.inferNode(node.value, typeEnv, constraints);
-            constraints.push([ typeVar, valueType ])
-          }
-
-          // We don't generalize a mutable variable declaration. It causes
-          // problems in the case we assign an expression of a different type
-          // to the variable. The assignment would be accepted, while it really
-          // shouldn't.
-          this.inferBinding(node.bindings, typeVar, typeEnv, constraints, false);
-
-          resultType = typeVar;
-
-        } else {
-
-          // It does not make sense to declare a read-only variable without a
-          // value associated with it.
-          if (node.value === null) {
-            throw new UninitializedBindingError(node);
-          }
-
-          resultType = this.inferNode(node.value!, typeEnv, constraints);
-
-          this.inferBinding(node.bindings, resultType, typeEnv, constraints, true);
+          return resultType;
         }
-
-        return resultType;
-      }
 
       case SyntaxKind.BoltConstantExpression:
-      {
-        if (typeof(node.value) === 'bigint') {
-          return this.intType;
-        } else if (typeof(node.value === 'string')) {
-          return this.stringType;
-        } else if (typeof(node.value) === 'boolean') {
-          return this.boolType;
-        } else {
-          throw new Error(`Could not infer type of BoltConstantExpression`)
+        {
+          if (typeof(node.value) === 'bigint') {
+            return this.intType;
+          } else if (typeof(node.value === 'string')) {
+            return this.stringType;
+          } else if (typeof(node.value) === 'boolean') {
+            return this.boolType;
+          } else {
+            throw new Error(`Could not infer type of BoltConstantExpression`)
+          }
         }
-      }
 
       case SyntaxKind.BoltReferenceExpression:
-      {
-        const varName = getSymbolText(node.name.name);
-        if (varName === '+') {
-          return new ArrowType([ this.intType, this.intType ], this.intType);
+        {
+          const varName = getSymbolText(node.name.name);
+          if (varName === '+') {
+            return new ArrowType([ this.intType, this.intType ], this.intType);
+          }
+          if (varName === '-') {
+            return new ArrowType([ this.intType, this.intType ], this.intType);
+          }
+          if (varName === '-') {
+            return new ArrowType([ this.intType, this.intType ], this.intType);
+          }
+          if (varName === '*') {
+            return new ArrowType([ this.intType, this.intType ], this.intType);
+          }
+          const type = typeEnv.lookup(varName);
+          if (type === null) {
+            throw new BindingNotFoundError(node, varName);
+          }
+          return type!;
         }
-        if (varName === '-') {
-          return new ArrowType([ this.intType, this.intType ], this.intType);
-        }
-        if (varName === '-') {
-          return new ArrowType([ this.intType, this.intType ], this.intType);
-        }
-        if (varName === '*') {
-          return new ArrowType([ this.intType, this.intType ], this.intType);
-        }
-        const type = typeEnv.lookup(varName);
-        if (type === null) {
-          throw new BindingNotFoundError(node, varName);
-        }
-        return type!;
-      }
 
       case SyntaxKind.BoltCallExpression:
-      {
-        // This type variable will contain the type that the call expression resolves to.
-        const returnType = new TypeVar();
+        {
+          // This type variable will contain the type that the call expression resolves to.
+          const returnType = new TypeVar();
 
-        // First we build a type of the function that has been called. This
-        // type should eventually resolve to an ArrowType.
-        const operatorType = this.inferNode(node.operator, typeEnv, constraints)
+          // First we build a type of the function that has been called. This
+          // type should eventually resolve to an ArrowType.
+          const operatorType = this.inferNode(node.operator, typeEnv, constraints)
 
-        // Build a list of types that correspond to the parameters of the
-        // function being called.
-        const operandTypes = [];
-        for (const operand of node.operands) {
-          const operandType = this.inferNode(operand, typeEnv, constraints);
-          operandTypes.push(operandType)
+          // Build a list of types that correspond to the parameters of the
+          // function being called.
+          const operandTypes = [];
+          for (const operand of node.operands) {
+            const operandType = this.inferNode(operand, typeEnv, constraints);
+            operandTypes.push(operandType)
+          }
+
+          // Now make sure that the signature built out of these parameter types
+          // actually match the function being called. They will be solved later
+          // by the unifier.
+          constraints.push([
+            operatorType,
+            new ArrowType(operandTypes, returnType)
+          ]);
+
+          return returnType;
         }
-
-        // Now make sure that the signature built out of these parameter types
-        // actually match the function being called. They will be solved later
-        // by the unifier.
-        constraints.push([
-          operatorType,
-          new ArrowType(operandTypes, returnType)
-        ]);
-
-        return returnType;
-      }
 
       case SyntaxKind.BoltFunctionExpression:
-      {
+        {
 
-        // Introduce a new scope by starting with a fresh environment.
-        const newEnv = typeEnv.clone();
+          // Introduce a new scope by starting with a fresh environment.
+          const newEnv = typeEnv.clone();
 
-        // Build the function's signature by going through its parameter types.
-        const paramTypes = [];
-        for (const param of node.params) {
-          const typeVar = new TypeVar();
-          paramTypes.push(typeVar);
-          this.inferBinding(param.bindings, typeVar, newEnv, constraints);
+          // Build the function's signature by going through its parameter types.
+          const paramTypes = [];
+          for (const param of node.params) {
+            const typeVar = new TypeVar();
+            paramTypes.push(typeVar);
+            this.inferBinding(param.bindings, typeVar, newEnv, constraints, false);
+          }
+
+          // Whatever the function returns is eventually determined by its body.
+          let returnType: Type;
+          if (node.expression !== null) {
+           returnType = this.inferNode(node.expression!, newEnv, constraints); 
+          } else {
+            throw new Error(`Not supported yet.`)
+          }
+
+          return new ArrowType(
+            paramTypes,
+            returnType
+          );
+
         }
-
-        // Whatever the function returns is eventually determined by its body.
-        let returnType: Type;
-        if (node.expression !== null) {
-         returnType = this.inferNode(node.expression!, newEnv, constraints); 
-        } else {
-          throw new Error(`Not supported yet.`)
-        }
-
-        return new ArrowType(
-          paramTypes,
-          returnType
-        );
-
-      }
 
       case SyntaxKind.BoltAssignStatement:
         {
@@ -676,8 +755,10 @@ export class TypeChecker {
   }
 
   public checkNode(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]): void {
-    if (isBoltExpression(node)) {
-      this.inferNode(node, typeEnv, constraints);
+    if (isBoltExpression(node) || isBoltFunctionDeclaration(node) || isBoltAssignStatement(node) || isBoltVariableDeclaration(node)) {
+      const type = this.inferNode(node, typeEnv, constraints);
+      this.nodeToType.set(node.id, type);
+      return;
     }
     switch (node.kind) {
       case SyntaxKind.BoltSourceFile:
@@ -688,10 +769,8 @@ export class TypeChecker {
       case SyntaxKind.BoltExpressionStatement:
         this.checkNode(node.expression, typeEnv, constraints);
         break;
-      case SyntaxKind.BoltAssignStatement:
-      case SyntaxKind.BoltVariableDeclaration:
-        this.inferNode(node, typeEnv, constraints);
-        break;
+      default:
+        throw new Error(`Could not typecheck node: unknown node type ${kindToString(node.kind)}`);
     }
   }
 
@@ -718,7 +797,7 @@ export class TypeChecker {
   }
 
   private areTypesEqual(a: Type, b: Type): boolean {
-    if (a === b) { 
+    if (a === b) {
       return true;
     }
     if (a.kind !== b.kind) {
@@ -784,13 +863,9 @@ export class TypeChecker {
     return newTypeEnv;
   }
 
-  public getTypeOfNode(node: Syntax, typeEnv?: TypeEnv): Type {
-    if (typeEnv === undefined) {
-      typeEnv = this.getTypeEnvForNode(node);
-    }
-    const constraints: Constraint[] = [];
-    const type = this.inferNode(node, typeEnv, constraints);
-    const substitution = this.solveConstraints(constraints);
+  public getTypeOfNode(node: Syntax): Type {;
+    const type = this.nodeToType.get(node.id);
+    const substitution = this.sourceFileToSubstitution.get(node.getSourceFile().id);
     return type.applySubstitution(substitution);
   }
 
