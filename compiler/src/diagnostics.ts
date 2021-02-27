@@ -2,16 +2,16 @@
 import * as fs from "fs"
 import chalk from "chalk"
 import { Syntax } from "./ast";
-import {format, MapLike, FormatArg, countDigits, mapValues, prettyPrint, assert, isPlainObject, isPrimitive, JsonObject, Json} from "./util";
+import {format, MapLike, FormatArg, countDigits, assert } from "./util";
 import { BOLT_DIAG_NUM_EXTRA_LINES } from "./constants";
 import { TextPos, TextFile, TextSpan } from "./text";
 
+export const E_UNINITIALIZED_BINDING = "This variable is read-only and has not been initialized."
+export const E_UNBOUND_FREE_VARIABLE = "Type {type} has {typeVar} as an unbound free type variable."
+export const E_PARAM_COUNT_MISMATCH = "Type {left} accepts {leftCount} arguments while {right} accepts {rightCount}"
 export const E_ASSIGN_TUPLE_LENGTH_MISMATCH = "Trying to assign a tuple of length {rhsLength} to a tuple of length {lhsLength}"
-export const E_TYPES_NOT_ASSIGNABLE = "Trying to assign to an expression of type {lhs}, which is incompatible with expression of type {rhs}"
-
 export const E_MAY_NOT_RETURN_BECAUSE_TYPE_RESOLVES_TO_VOID = "May not return a value because the function's return type resolves to '()'"
 export const E_MUST_RETURN_BECAUSE_TYPE_DOES_NOT_RESOLVE_TO_VOID = "Must return a value because the function's return type does not resolve to '()'"
-
 export const E_INVALID_TEST_COMPARE = "The given test results cannot be compared because they use different specifications."
 export const E_TESTS_DO_NOT_COMPARE = "This test does not compare with its expected output."
 export const E_NO_BOLTFILE_FOUND_IN_PATH_OR_PARENT_DIRS = 'No Boltfile found in {path} or any of its parent directories.'
@@ -26,7 +26,7 @@ export const E_FIELD_NOT_PRESENT = "Field '{name}' is not present."
 export const E_FIELD_MUST_BE_BOOLEAN = "Field '{name}' must be a either 'true' or 'false'."
 export const E_TYPE_DECLARATION_NOT_FOUND = "A type declaration named '{name}' was not found."
 export const E_DECLARATION_NOT_FOUND = "Reference to an undefined declaration '{name}'.";
-export const E_TYPE_MISMATCH = "Types '{left}' and '{right}' are not compatible with one another.";
+export const E_TYPE_UNIFICATION_FAILURE = "Types '{left}' and '{right}' could not be unified.";
 export const E_THIS_NODE_CAUSED_INVALID_TYPE = "This expression resolved to the type {type}, which is incompatible with {origType}."
 export const E_TOO_FEW_ARGUMENTS_FOR_FUNCTION_CALL = "Too few arguments for function call. Expected {expected} but got {actual}.";
 export const E_TOO_MANY_ARGUMENTS_FOR_FUNCTION_CALL = "Too many arguments for function call. Expected {expected} but got {actual}.";
@@ -46,8 +46,16 @@ export const TYPE_ERROR_MESSAGES = [
   E_TOO_FEW_ARGUMENTS_FOR_FUNCTION_CALL,
   E_TOO_MANY_ARGUMENTS_FOR_FUNCTION_CALL,
   E_ARGUMENT_TYPE_NOT_ASSIGNABLE,
-  E_TYPE_MISMATCH,
+  E_TYPE_UNIFICATION_FAILURE,
 ]
+
+export class CompileError extends Error {
+  constructor(public diagnostic: Diagnostic) {
+    super(diagnostic.args !== undefined 
+      ? format(diagnostic.message, diagnostic.args)
+      : diagnostic.message)
+  }
+}
 
 const BOLT_HARD_ERRORS = process.env['BOLT_HARD_ERRORS']
 

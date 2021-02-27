@@ -5,10 +5,10 @@ import { sync as globSync } from "glob"
 import { now } from "moment"
 import * as path from "path"
 import { BoltSourceFile, BoltToken, setParents, SourceFile, Visitor } from "./ast"
-import { TypeChecker } from "./checker"
+import { TypeChecker, TypeCheckError } from "./checker"
 import { CheckInvalidFilePaths, CheckReferences, CheckTypeAssignments } from "./checks"
 import { describeKind, getNodeLanguage, ParseError, ScanError } from "./common"
-import { DiagnosticPrinter, E_NO_BOLTFILE_FOUND_IN_PATH_OR_PARENT_DIRS, E_PARSE_ERROR, E_SCAN_ERROR, E_STDLIB_NOT_FOUND } from "./diagnostics"
+import { CompileError, DiagnosticPrinter, E_NO_BOLTFILE_FOUND_IN_PATH_OR_PARENT_DIRS, E_PARSE_ERROR, E_SCAN_ERROR, E_STDLIB_NOT_FOUND } from "./diagnostics"
 import { emitNode } from "./emitter"
 import { Evaluator } from "./evaluator"
 import { Container, Newable } from "./ioc"
@@ -85,7 +85,7 @@ export class Frontend {
   public check(program: Program) {
 
     const resolver = new SymbolResolver(program, new BoltSymbolResolutionStrategy);
-    const checker = new TypeChecker(resolver, this.diagnostics);
+    const checker = new TypeChecker();
 
     const container = new Container();
     container.bindSelf(program);
@@ -95,7 +95,7 @@ export class Frontend {
 
     const checkClasses: Newable<Visitor>[] = [
        CheckInvalidFilePaths,
-       CheckReferences,
+       //CheckReferences,
        CheckTypeAssignments,
     ];
 
@@ -105,10 +105,14 @@ export class Frontend {
       resolver.registerSourceFile(sourceFile);
     }
     for (const sourceFile of program.getAllSourceFiles()) {
-      checker.registerSourceFile(sourceFile);
-    }
-    for (const sourceFile of program.getAllSourceFiles()) {
-      checker.checkNode(sourceFile);
+      try {
+        checker.registerSourceFile(sourceFile);
+      } catch (error) {
+        if (!(error instanceof CompileError)) { 
+          throw error;
+        }
+        this.diagnostics.add(error.diagnostic);
+      }
     }
 
     for (const pkg of program.getAllPackages()) {
@@ -164,7 +168,7 @@ export class Frontend {
 
   public eval(program: Program) {
     const resolver = new SymbolResolver(program, new BoltSymbolResolutionStrategy);
-    const checker = new TypeChecker(resolver, this.diagnostics);
+    const checker = new TypeChecker();
     const evaluator = new Evaluator(checker)
     for (const sourceFile of program.getAllSourceFiles()) {
       evaluator.eval(sourceFile)

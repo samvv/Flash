@@ -1,8 +1,8 @@
 
-import { DefaultDeserializer } from "v8";
 import { BoltModifiers, BoltPattern, BoltVariableDeclaration, isBoltAssignStatement, isBoltBlockExpression, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltSourceFile, isBoltVariableDeclaration, kindToString, SourceFile, Syntax, SyntaxKind } from "./ast";
 import { getAllReturnStatementsInFunctionBody, getSymbolText } from "./common";
-import { assert, FastStringMap } from "./util";
+import { CompileError, Diagnostic, E_DECLARATION_NOT_FOUND, E_PARAM_COUNT_MISMATCH, E_THIS_NODE_CAUSED_INVALID_TYPE, E_TYPE_DECLARATION_NOT_FOUND, E_TYPE_UNIFICATION_FAILURE, E_UNBOUND_FREE_VARIABLE, E_UNINITIALIZED_BINDING } from "./diagnostics";
+import { assert, FastStringMap, prettyPrintTag } from "./util";
 
 enum TypeKind {
   TypeVar,
@@ -58,7 +58,7 @@ class TypeVar implements TypeBase {
     }
   }
 
-  public format() {
+  public [prettyPrintTag]() {
     return this.varId;
   }
 
@@ -82,9 +82,9 @@ class TupleType implements TypeBase {
     )
   }
 
-  public format(): string {
+  public [prettyPrintTag](): string {
     return '(' + this.elements
-      .map(type => type.format())
+      .map(type => type[prettyPrintTag]())
       .join(', ') + ')';
   }
 
@@ -109,7 +109,7 @@ class PrimType implements TypeBase {
     return this;
   }
 
-  public format() {
+  public [prettyPrintTag]() {
     return this.displayName;
   }
 
@@ -138,8 +138,8 @@ class ArrowType implements TypeBase {
     )
   }
 
-  public format(): string {
-    return `(${this.paramTypes.map(type => type.format()).join(', ')}) -> ${this.returnType.format()}`
+  public [prettyPrintTag](): string {
+    return `(${this.paramTypes.map(type => type[prettyPrintTag]()).join(', ')}) -> ${this.returnType[prettyPrintTag]()}`
   }
 
 }
@@ -415,7 +415,7 @@ function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
   // isn't used, bindTypeVar would do nothing and we are at risk of having an
   // infinite loop in the unifier.
   if (type.hasTypeVariable(typeVar)) {
-    throw new Error(`Type ${type.format()} has ${typeVar.format()} as an unbound free type variable.`);
+    throw new UnboundFreeVariableError(type, typeVar);
   }
 
   const substitution = new TypeVarSubstitution();
@@ -439,37 +439,91 @@ function getNodeIntroducingScope(node: Syntax) {
   }
 }
 
-export class TypeCheckError extends Error {
+export class TypeCheckError extends CompileError {
 
 }
 
 export class UnificationError extends TypeCheckError {
+
   constructor(public left: Type, public right: Type) {
-    super(`Type ${left.format()} could not be unified with ${right.format()}.`)
+    super({
+      message: E_TYPE_UNIFICATION_FAILURE,
+      args: {
+        left,
+        right,
+      },
+      severity: 'error',
+    });
   }
 }
 
 export class TypeNotFoundError extends TypeCheckError {
+
   constructor(public node: Syntax, public typeName: string) {
-    super(`A type named '${typeName}' could not be found.`);
+    super({
+      node: node,
+      message: E_TYPE_DECLARATION_NOT_FOUND,
+      args: {
+        name: typeName,
+      },
+      severity: 'error'
+    });
   }
+
 }
 
 export class ParamCountMismatchError extends TypeCheckError {
-  constructor(public a: ArrowType, public b: ArrowType) {
-    super(`${a.format()} accepts ${a.paramTypes.length} arguments while ${b.format()} accepts ${b.paramTypes.length}`);
+
+  constructor(public left: ArrowType, public right: ArrowType) {
+    super({
+      message: E_PARAM_COUNT_MISMATCH,
+      args: {
+        left,
+        right,
+        leftCount: left.paramTypes.length,
+        rightCount: right.paramTypes.length,
+      },
+      severity: 'error'
+    });
   }
+
+}
+
+export class UnboundFreeVariableError extends TypeCheckError {
+
+  constructor(public type: Type, public typeVar: TypeVar) {
+    super({
+      message: E_UNBOUND_FREE_VARIABLE,
+      args: {
+        type,
+        typeVar
+      },
+      severity: 'error',
+    })
+  }
+
 }
 
 export class BindingNotFoundError extends TypeCheckError {
-  constructor(public node: Syntax, public varName: string) {
-    super(`A binding named '${varName}' was not found.`);
+  constructor(public node: Syntax, public name: string) {
+    super({
+      node,
+      message: E_DECLARATION_NOT_FOUND,
+      args: {
+        name
+      },
+      severity: 'error'
+    });
   }
 }
 
 export class UninitializedBindingError extends TypeCheckError {
   constructor(public node: BoltVariableDeclaration) {
-    super(`Immutable variable declaration was not assigned a value.`);
+    super({
+      node,
+      message: E_UNINITIALIZED_BINDING,
+      severity: 'error'
+    });
   }
 }
 
