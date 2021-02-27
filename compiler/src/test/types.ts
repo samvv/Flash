@@ -129,7 +129,7 @@ test('a reference to a binding that does not exist is caught as an error', t => 
     checker.registerSourceFile(sourceFile);
   }) as BindingNotFoundError;
   t.assert(error instanceof BindingNotFoundError);
-  t.assert(error.varName === 'x');
+  t.assert(error.name === 'x');
 })
 
 test('a variable is correctly checked for invalid assignments', t => {
@@ -156,7 +156,7 @@ a = "baz";
 `)
   const checker = new TypeChecker();
   checker.registerSourceFile(sourceFile)
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0]);
+  const exprType = checker.getTypeOfNode(sourceFile.elements[0]);
   t.assert(checker.isStringType(exprType));
 });
 
@@ -203,3 +203,106 @@ fac(1);
   const type = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
   t.assert(checker.isIntType(type));
 })
+
+test('a plain variable can only be used after it has been declared', t => {
+  const sourceFile = parseSourceFile(`
+let a = b;
+let b = 1;
+`)
+  const checker = new TypeChecker();
+  const error = t.throws(() => {
+    checker.registerSourceFile(sourceFile)
+  }) as BindingNotFoundError;
+  t.assert(error instanceof BindingNotFoundError);
+  t.assert(error.name === 'b');
+});
+
+test('an untyped expression will derive its return type from the function body', t => {
+  const sourceFile = parseSourceFile(`
+fn bar(i) {
+  return i;
+}
+fn foo(i) {
+  return bar(i + 1);
+}
+foo(1);
+`);
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(exprType));
+});
+
+
+test('two fully typed functions that are mutually recursive can be defined', t => {
+  const sourceFile = parseSourceFile(`
+fn a(i: int) -> int {
+  return b(i / 2);
+}
+fn b(i: int) -> int {
+  return a(i + 1);
+}
+a(1);
+`)
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  const exprType = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
+  t.assert(checker.isIntType(exprType));
+
+  const sourceFile2 = parseSourceFile(`
+fn a(i: int) -> int {
+  return b("foo");
+}
+fn b(i: int) -> int {
+  return a(i + 1);
+}
+a(1);
+`)
+  const checker2 = new TypeChecker();
+  const error2 = t.throws(() => {
+    checker2.registerSourceFile(sourceFile2);
+  });
+  t.assert(error2 instanceof UnificationError);
+
+  const sourceFile3 = parseSourceFile(`
+fn a(i: int) -> int {
+  return b(i / 2);
+}
+fn b(i: int) -> int {
+  return a("foo");
+}
+a(1);
+`)
+  const checker3 = new TypeChecker();
+  const error3 = t.throws(() => {
+    checker3.registerSourceFile(sourceFile3);
+  })
+  t.assert(error3 instanceof UnificationError);
+});
+
+test('two untyped functions that are mutually recursive can be defined', t => {
+  const sourceFile = parseSourceFile(`
+fn is_even(i) {
+  if (i == 0) {
+    return true;
+  } else {
+    return is_odd(i-1);
+  }
+}
+fn is_odd(i) {
+  if i == 1 {
+    return true;
+  } else {
+    return is_even(i-1);
+  }
+}
+is_even(1);
+is_odd(2);
+`)
+  const checker = new TypeChecker();
+  checker.registerSourceFile(sourceFile);
+  const exprType1 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
+  t.assert(checker.isBoolType(exprType1));
+  const exprType2 = checker.getTypeOfNode((sourceFile.elements[3] as BoltExpressionStatement).expression);
+  t.assert(checker.isBoolType(exprType2));
+});
