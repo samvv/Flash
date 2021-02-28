@@ -1,0 +1,15 @@
+# This is a Boltfile containing mutliple packages
+# Each package maps to a directory in src/
+- name: core
+  version: 0.0.1
+  files:
+  - path: src/core.bolt
+    auto-import: true
+- name: math
+  version: 0.0.1
+  files:
+  - src/math.bolt
+- name: collections
+  version: 0.0.1
+  files:
+  - src/collections/**/*.bolt

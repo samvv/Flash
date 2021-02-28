@@ -1,0 +1,19 @@
+
+pub enum Bool {
+  True,
+  False,
+}
+
+pub let true  = Bool::True;
+pub let false = Bool::False;
+
+struct String;
+
+struct Int;
+
+pub fn (a: Int) + (b: Int) -> Int;
+pub fn (a: Int) - (b: Int) -> Int;
+pub fn (a: Int) * (b: Int) -> Int;
+pub fn (a: Int) / (b: Int) -> Int;
+pub fn (a: Int) == (b: Int) -> Bool;
+

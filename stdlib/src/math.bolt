@@ -1,0 +1,8 @@
+
+pub fn fac(n: Int) -> Int {
+  return match n {
+    0 => 1,
+    n => n * fac(n-1),
+  }
+}
+
