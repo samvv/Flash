@@ -296,61 +296,6 @@ export function isRef<T extends object>(value: T): value is Ref<T> {
       && (value as any)[refSymbolTag] !== undefined
 }
 
-export function createRef<T extends object>(value: T): Ref<T> {
- return new Proxy<any>({
-    [refSymbolTag]: { value },
-    replaceWith(newValue: T) {
-      this[refSymbolTag].value = isRef(newValue) ? (newValue as any)[refSymbolTag].value : newValue;
-    },
-    cloneRef() {
-      return createRef(this[refSymbolTag].value);
-    }
-  }, {
-   getPrototypeOf(target: T): object | null {
-     return Reflect.getPrototypeOf((target as any)[refSymbolTag].value);
-   },
-   setPrototypeOf(target: T, v: any): boolean {
-     return Reflect.setPrototypeOf((target as any)[refSymbolTag].value, v);
-   },
-   isExtensible(target: T): boolean {
-     return Reflect.isExtensible((target as any)[refSymbolTag].value);
-   },
-   preventExtensions(target: T): boolean {
-     return Reflect.preventExtensions((target as any)[refSymbolTag].value);
-   },
-   getOwnPropertyDescriptor(target: T, p: PropertyKey): PropertyDescriptor | undefined {
-     return Reflect.getOwnPropertyDescriptor((target as any)[refSymbolTag].value, p);
-   },
-   has(target: T, p: PropertyKey): boolean {
-     return Reflect.has((target as any)[refSymbolTag].value, p);
-   },
-   get(target: T, p: PropertyKey, receiver: any): any {
-     if (hasOwnProperty(target, p)) {
-       return Reflect.get(target, p);
-     }
-     return Reflect.get((target as any)[refSymbolTag].value, p, receiver)
-   },
-   set(target: T, p: PropertyKey, value: any, receiver: any): boolean {
-     return Reflect.set((target as any)[refSymbolTag].value, p, value);
-   },
-   deleteProperty(target: T, p: PropertyKey): boolean {
-     return Reflect.deleteProperty((target as any)[refSymbolTag].value, p);
-   },
-   defineProperty(target: T, p: PropertyKey, attributes: PropertyDescriptor): boolean {
-     return Reflect.defineProperty((target as any)[refSymbolTag].value, p, attributes);
-   },
-   ownKeys(target: T): PropertyKey[] {
-     return Reflect.ownKeys((target as any)[refSymbolTag].value);
-   },
-   apply(target: T, thisArg: any, argArray?: any): any {
-     return Reflect.apply((target as any)[refSymbolTag].value as any, thisArg, argArray);
-   },
-   construct(target: T, argArray: any, newTarget?: any): object {
-     return Reflect.construct((target as any)[refSymbolTag].value as any, argArray, newTarget);
-   }
- });
-}
-
 export const getKeyTag = Symbol('get key of object');
 
 function getKey(value: any): string {
