@@ -89,6 +89,9 @@ import {
   createBoltCaseStatementCase,
   createBoltCaseStatement,
   BoltCaseStatement,
+  createBoltEnumDeclaration,
+  BoltEnumDeclarationElement,
+  BoltEnumDeclaration,
 } from "./ast"
 
 import { parseForeignLanguage } from "./foreign"
@@ -97,11 +100,11 @@ import {
   OperatorKind,
   OperatorTable,
   assertToken,
-  ParseError,
   setOrigNodeRange,
   createTokenStream,
 } from "./common"
-import { Stream, uniq } from "./util"
+import { ParseError } from "./diagnostics";
+import { assert, Stream, uniq } from "./util"
 
 import { Scanner } from "./scanner"
 import { TextSpan, TextPos, TextFile } from "./text"
@@ -940,7 +943,11 @@ export class Parser {
     let typeDecl = null;
     let value = null;
 
-    const t0 = tokens.get();
+    let t0 = tokens.get();
+    if (t0.kind === SyntaxKind.BoltPubKeyword) {
+      modifiers |= BoltModifiers.IsPublic;
+      t0 = tokens.get();
+    }
     assertToken(t0, SyntaxKind.BoltLetKeyword);
 
     const t1 = tokens.peek();
@@ -1147,6 +1154,47 @@ export class Parser {
     return typeParams;
   }
 
+  public parseEnumDeclaration(tokens: BoltTokenStream): BoltEnumDeclaration {
+
+    let modifiers = 0;
+    let typeParams = null;
+    let members: BoltEnumDeclarationElement[] = [];
+
+    let t0 = tokens.get();
+    const firstToken = t0;
+    if (t0.kind === SyntaxKind.BoltPubKeyword) {
+      modifiers |= BoltModifiers.IsPublic;
+      t0 = tokens.get();
+    }
+
+    assertToken(t0, SyntaxKind.BoltEnumKeyword);
+
+    const t1 = tokens.get();
+    assertToken(t1, SyntaxKind.BoltIdentifier);
+    const name = t1 as BoltIdentifier;
+
+    const t2 = tokens.get();
+    assertToken(t2, SyntaxKind.BoltBraced);
+    const memberTokens = createTokenStream(t2);
+    while (true) {
+      const t3 = memberTokens.get();
+      if (t3.kind === SyntaxKind.EndOfFile) {
+        break;
+      }
+      assertToken(t3, SyntaxKind.BoltIdentifier);
+      members.push(t3 as BoltIdentifier);
+      const t4 = memberTokens.get();
+      if (t4.kind === SyntaxKind.EndOfFile) {
+        break;
+      }
+      assertToken(t4, SyntaxKind.BoltComma);
+    }
+
+    const node = createBoltEnumDeclaration(modifiers, name, typeParams, members)
+    setOrigNodeRange(node, firstToken, t2);
+    return node;
+  }
+
   public parseRecordDeclaration(tokens: BoltTokenStream): BoltRecordDeclaration {
 
     let modifiers = 0;
@@ -1167,6 +1215,7 @@ export class Parser {
 
     let t2 = tokens.peek();
 
+    // FIXME What is this doing here?
     if (t2.kind === SyntaxKind.EndOfFile) {
       const node = createBoltRecordDeclaration(modifiers, name, null, []);
       setOrigNodeRange(node, firstToken, t2);
@@ -1645,8 +1694,8 @@ export class Parser {
         return this.parseVariableDeclaration(tokens);
       case SyntaxKind.BoltStructKeyword:
         return this.parseRecordDeclaration(tokens);
-      case SyntaxKind.BoltStructKeyword:
-        return this.parseVariableDeclaration(tokens);
+      case SyntaxKind.BoltEnumKeyword:
+        return this.parseEnumDeclaration(tokens);
       default:
         throw new ParseError(t0, KIND_DECLARATION_T0);
       }
@@ -1763,7 +1812,7 @@ export class Parser {
     return elements
   }
 
-  public parseSourceFile(tokens: BoltTokenStream, pkg: Package | null = null): BoltSourceFile {
+  public parseSourceFile(tokens: BoltTokenStream, pkg: Package): BoltSourceFile {
     const elements = this.parseSourceElements(tokens);
     const t1 = tokens.peek();
     assertToken(t1, SyntaxKind.EndOfFile);

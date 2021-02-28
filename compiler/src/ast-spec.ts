@@ -12,16 +12,17 @@ type SyntaxKind = number;
 
 export type ResolveSyntaxKind<K extends SyntaxKind> = Extract<Syntax, { kind: K }>;
 
-enum NodeFlags {
+export enum NodeFlags {
   None = 0,
   HasTypeError = 1,
+  AutoImported = 2,
 }
 
 export abstract class Syntax {
 
   public id: number;
 
-  private flags = NodeFlags.None;
+  public flags = NodeFlags.None;
 
   public errors: Diagnostic[] = [];
 
@@ -103,7 +104,7 @@ export abstract class Syntax {
   }
 
   public getSourceFile(): SourceFile {
-    let currNode: Syntax | null = this;
+    let currNode: Syntax | null = this as any;
     do {
       if (isSourceFile(currNode)) {
         return currNode;
@@ -157,7 +158,7 @@ export interface BoltIntegerLiteral extends BoltToken {
 
 export interface BoltSymbol extends BoltToken {}
 
-export interface BoltIdentifier extends BoltSymbol {
+export interface BoltIdentifier extends BoltSymbol, BoltEnumDeclarationElement {
   text: string,
 }
 
@@ -222,7 +223,7 @@ export interface BoltBracketed extends BoltPunctuated {}
 
 export interface BoltSourceFile extends BoltSyntax, SourceFile {
   elements: BoltSourceElement[],
-  pkg: Package | null,
+  pkg: Package,
 }
 
 export interface BoltQualName extends BoltSyntax {
@@ -490,6 +491,15 @@ export interface BoltTypeAliasDeclaration extends BoltDeclarationLike, BoltTypeD
   name: BoltIdentifier,
   typeParams: BoltTypeParameter[] | null,
   typeExpr: BoltTypeExpression,
+}
+
+export interface BoltEnumDeclarationElement extends BoltSyntax {}
+
+export interface BoltEnumDeclaration extends BoltDeclaration, BoltTypeDeclaration, BoltDeclarationLike {
+  modifiers: BoltModifiers,
+  name: BoltIdentifier;
+  typeParams: BoltTypeParameter[] | null;
+  members: BoltEnumDeclarationElement[];
 }
 
 export interface BoltRecordDeclartionElement extends BoltSyntax {}

@@ -30,7 +30,8 @@ import {
   isBoltReferenceExpression,
   isBoltToken,
   SourceFile,
-  Syntax
+  Syntax,
+  prettyPrint
 } from "@boltlang/compiler";
 
 interface TextPositionLike {
@@ -163,7 +164,7 @@ function configureConnection(connection: Connection) {
           workspaceFolders.delete(removed.uri)
         }
         for (const added of event.added) {
-          workspaceFolders.set(added.uri, { name: added.name, uri: added.uri })
+          workspaceFolders.add(added.uri, { name: added.name, uri: added.uri })
         }
       })
     }
@@ -202,7 +203,7 @@ function configureConnection(connection: Connection) {
             start: { line: e.position.line-1, character: e.position.column-1 },
             end: { line: e.position.line-1, character: e.position.column-1 },
           },
-          message: e.errorText
+          message: e.diagnostic.formattedMessage
         });
         connection.sendDiagnostics({ uri: document.uri, diagnostics })
         return;
@@ -210,7 +211,7 @@ function configureConnection(connection: Connection) {
         throw e;
       }
     }
-    sourceFiles.set(document.uri, new SourceFileHandle(document.getText(), sourceFile));
+    sourceFiles.add(document.uri, new SourceFileHandle(document.getText(), sourceFile));
     connection.sendDiagnostics({ uri: document.uri, diagnostics })
   }
 
@@ -242,10 +243,8 @@ function configureConnection(connection: Connection) {
       return null;
     }
 
-    console.log(nodeType.format());
-
     return {
-      contents: nodeType.format(),
+      contents: prettyPrint(nodeType),
       range: {
         start: { line: node.span!.start.line-1, character: node.span!.start.column-1  },
         end: { line: node.span!.end.line-1, character: node.span!.end.column-1 }

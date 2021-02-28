@@ -6,11 +6,17 @@ import * as os from "os"
 import moment from "moment"
 import chalk from "chalk"
 import { LOG_DATETIME_FORMAT } from "./constants"
-import { timeStamp } from "console"
 
 export function isPowerOf(x: number, n: number):boolean {
   const a = Math.log(x) / Math.log(n);
   return Math.pow(a, n) == x;
+}
+
+export function toArray<T>(value: T | T[]): T[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return value === null || value === undefined ? [] : [value]
 }
 
 export function some<T>(iterator: Iterator<T>, pred: (value: T) => boolean): boolean {
@@ -113,8 +119,8 @@ export function stripExtensions(filepath: string) {
     : filepath;
 }
 
-export function isString(value: any): boolean {
-  return typeof value === 'string';
+export function isString(value: any): value is string {
+  return typeof(value) === 'string';
 }
 
 export function hasOwnProperty<T extends object, K extends PropertyKey>(obj: T, key: K): boolean {
@@ -333,9 +339,6 @@ export function createRef<T extends object>(value: T): Ref<T> {
    defineProperty(target: T, p: PropertyKey, attributes: PropertyDescriptor): boolean {
      return Reflect.defineProperty((target as any)[refSymbolTag].value, p, attributes);
    },
-   enumerate(target: T): PropertyKey[] {
-     return [...Reflect.enumerate((target as any)[refSymbolTag].value)];
-   },
    ownKeys(target: T): PropertyKey[] {
      return Reflect.ownKeys((target as any)[refSymbolTag].value);
    },
@@ -346,9 +349,6 @@ export function createRef<T extends object>(value: T): Ref<T> {
      return Reflect.construct((target as any)[refSymbolTag].value as any, argArray, newTarget);
    }
  });
-}
-
-function delegate<T extends object, U extends object>(obj: T, handlerObject: U): T & U {
 }
 
 export const getKeyTag = Symbol('get key of object');
@@ -427,7 +427,7 @@ export class FastStringMap<K extends PropertyKey, V> {
 
   constructor(elements: Iterable<[K, V]> = []) {
     for (const [k, v] of elements) {
-      this.set(k, v);
+      this.add(k, v);
     }
   }
 
@@ -435,8 +435,13 @@ export class FastStringMap<K extends PropertyKey, V> {
     this.mapping.clear();
   }
 
-  // FIXME Some users of this method wrongly expect this method to throw an
-  //       error when the key already exists.
+  public add(key: K, value: V): void {
+    if (key in this.mapping) {
+      throw new Error(`Key '${key}' already exists in this mapping.`);
+    }
+    this.mapping[key] = value;
+  }
+
   public set(key: K, value: V): void {
     this.mapping[key] = value;
   }
@@ -668,12 +673,14 @@ export function error(message: string) {
   console.error(chalk.gray('[') + chalk.red('erro') + ' ' + chalk.gray(moment().format(LOG_DATETIME_FORMAT) + ']') + ' ' + message);
 }
 
-export function upsearchSync(filename: string, startDir = '.') {
+export function upsearchSync(filenames: string[], startDir = '.') {
   let currDir = startDir;
   while (true) {
-    const filePath = path.join(currDir, filename);
-    if (fs.existsSync(filePath)) {
-      return filePath
+    for (const filename of filenames) {
+      const filePath = path.join(currDir, filename);
+      if (fs.existsSync(filePath)) {
+        return filePath
+      }
     }
     const { root, dir } = path.parse(currDir);
     if (currDir === root) {

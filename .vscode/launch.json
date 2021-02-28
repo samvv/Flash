@@ -41,12 +41,13 @@
             "type": "node",
             "request": "launch",
             "sourceMaps": true,
-            "outFiles": [
-                "${workspaceFolder}/compiler/**/*.js"
-            ],
+            "env": {
+                "BOLT_VERBOSE": "1"
+            },
             "outputCapture": "std",
             "skipFiles": [
-                "**/node_modules"
+                "**/node_modules",
+                "<node_internals>/**"
             ],
             "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ava",
             "cwd": "${workspaceFolder}/compiler"
@@ -56,19 +57,16 @@
             "type": "node",
             "request": "launch",
             "sourceMaps": true,
-            "outFiles": [
-                "${workspaceFolder}/cli/bin/*.js"
-            ],
             "outputCapture": "std",
             "skipFiles": [
-                "${workspaceFolder}/node_modules/**/*.js",
+                "**/node_modules",
                 "<node_internals>/**"
             ],
             "program": "${workspaceFolder}/cli/src/main.ts",
             "args": [
                 "check",
-                "test.bolt",
-                "--no-std"
+                "stdlib",
+                "test2.bolt"
             ]
         }
     ],

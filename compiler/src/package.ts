@@ -2,13 +2,14 @@
 import * as path from "path"
 import * as fs from "fs"
 
+import AJV from "ajv"
 import yaml from "js-yaml"
 import semver from "semver"
 
-import {DiagnosticPrinter, E_FIELD_MUST_BE_BOOLEAN, E_FIELD_NOT_PRESENT, E_FIELD_MUST_BE_STRING, E_FIELD_HAS_INVALID_VERSION_NUMBER} from "./diagnostics";
-import {hasOwnProperty, FastStringMap} from "./util";
-import {isString} from "util"
+import { FileNotFoundError, InvalidBoltfileError} from "./diagnostics";
+import { FastStringMap } from "./util";
 import { SourceFile } from "./ast";
+import { Boltfile } from "./boltfile"
 
 let nextPackageId = 1;
 
@@ -22,9 +23,8 @@ export class Package {
     public rootDir: string,
     public name: string | null,
     public version: string | null,
-    sourceFiles: SourceFile[],
-    public isAutoImported: boolean,
-    public isDependency: boolean,
+    public basePath: string = '.',
+    sourceFiles: SourceFile[] = [],
   ) {
     for (const sourceFile of sourceFiles) {
       this.addSourceFile(sourceFile);
@@ -36,7 +36,7 @@ export class Package {
   }
 
   public getMainLibrarySourceFile(): SourceFile | null {
-    const fullPath = path.resolve(this.rootDir, 'lib.bolt');
+    const fullPath = path.resolve(this.rootDir, this.basePath, 'lib.bolt');
     if (!this.sourceFilesByPath.has(fullPath)) {
       return null;
     }
@@ -44,90 +44,29 @@ export class Package {
   }
 
   public addSourceFile(sourceFile: SourceFile) {
-    this.sourceFilesByPath.set(sourceFile.span!.file.fullPath, sourceFile);
+    this.sourceFilesByPath.add(sourceFile.span!.file.fullPath, sourceFile);
   }
 
 }
 
-export function loadPackageMetadata(diagnostics: DiagnosticPrinter, filepath: string) {
+const ajv = new AJV();
+const schema = require('../boltfile.schema.json');
+const validate = ajv.compile(schema);
 
-  let name = null
-  let version = null;
-  let autoImport = false;
+export function loadPackageMetadata(filepath: string): Boltfile {
 
-  let hasVersionErrors = false;
-  let hasNameErrors = false;
+  if (!fs.existsSync(filepath)) {
+    throw new FileNotFoundError(filepath);
+  }
 
-  if (fs.existsSync(filepath)) {
-    const data = yaml.safeLoad(fs.readFileSync(filepath, 'utf8'));
-    if (data !== undefined) {
-      if (hasOwnProperty(data, 'name')) {
-        if (!isString(data.name)) {
-          diagnostics.add({
-            message: E_FIELD_MUST_BE_STRING,
-            severity: 'error',
-            args: { name: 'name' },
-          });
-          hasNameErrors = true;
-        } else {
-          name = data.name;
-        }
-      }
-      if (hasOwnProperty(data, 'version')) {
-        if (!isString(data.version)) {
-          diagnostics.add({
-            message: E_FIELD_MUST_BE_STRING,
-            args: { name: 'version' },
-            severity: 'error',
-          });
-          hasVersionErrors = true;
-        } else {
-          if (!semver.valid(data.version)) {
-            diagnostics.add({
-              message: E_FIELD_HAS_INVALID_VERSION_NUMBER,
-              args: { name: 'version' },
-              severity: 'error',
-            });
-            hasVersionErrors = true;
-          } else {
-            version = data.version;
-          }
-        }
-      }
-      if (hasOwnProperty(data, 'auto-import')) {
-        if (typeof(data['auto-import']) !== 'boolean') {
-          diagnostics.add({
-            message: E_FIELD_MUST_BE_BOOLEAN,
-            args: { name: 'auto-import' },
-            severity: 'error', 
-          })
-        } else {
-          autoImport = data['auto-import'];
-        }
-      }
+  const data = yaml.load(fs.readFileSync(filepath, 'utf8'));
+
+  if (!validate(data)) {
+    for (const error of validate.errors!) {
+      throw new InvalidBoltfileError(filepath, validate.errors);
     }
   }
 
-  if (name === null && !hasNameErrors) {
-    diagnostics.add({
-      message: E_FIELD_NOT_PRESENT,
-      severity: 'warning',
-      args: { name: 'name' },
-    });
-  }
-
-  if (version === null && !hasVersionErrors) {
-    diagnostics.add({
-      message: E_FIELD_NOT_PRESENT,
-      severity: 'warning',
-      args: { name: 'version' },
-    });
-  }
-
-  return {
-    name,
-    version,
-    autoImport,
-  };
+  return data as Boltfile;
 
 }

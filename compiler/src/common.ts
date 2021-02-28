@@ -20,27 +20,19 @@ import { enumOr, escapeChar, assert, registerClass, GeneratorStream, FastMultiMa
 import { TextSpan, TextPos, TextFile } from "./text";
 import { Scanner } from "./scanner";
 import { convertNodeToSymbolPath, SymbolPath } from "./resolver";
-import { TYPE_ERROR_MESSAGES } from "./diagnostics";
+import { CompileError, E_PARSE_ERROR, E_SCAN_ERROR, ParseError, TYPE_ERROR_MESSAGES } from "./diagnostics";
 import { NODE_TYPES } from "./ast"
+import { Package } from "./package";
 
 for (const key of Object.keys(NODE_TYPES)) {
   registerClass((NODE_TYPES as any)[key]);
 }
 
-export function getSourceFile(node: Syntax) {
-  while (true) {
-    if (isSourceFile(node)) {
-      return node
-    }
-    assert(node.parentNode !== null);
-    node = node.parentNode!;
-  }
-}
-
-export function getPackage(node: Syntax) {
-  const sourceFile = getSourceFile(node);
-  assert(sourceFile.kind === SyntaxKind.BoltSourceFile);
-  return (sourceFile as BoltSourceFile).pkg;
+export function getPackage(node: BoltSourceFile): Package {
+  const sourceFile = node.getSourceFile() as BoltSourceFile;
+  assert(sourceFile.kind === SyntaxKind.BoltSourceFile)
+  assert(sourceFile.pkg !== null);
+  return sourceFile.pkg!;
 }
 
 export function getNodeLanguage(node: Syntax): string {
@@ -70,17 +62,6 @@ export function createTokenStream(value: any) {
 }
 
 export const EOF = ''
-
-export class ScanError extends Error {
-
-  public errorText: string;
-
-  constructor(public file: TextFile, public position: TextPos, public char: string) {
-    super(`${file.origPath}:${position.line}:${position.column}: unexpected character '${escapeChar(char)}'`)
-    this.errorText = `Unexpected character '${escapeChar(char)}'`
-  }
-
-}
 
 export function cloneSpan(span: TextSpan | null) {
   if (span === null) {
@@ -150,21 +131,6 @@ export function isRightAssoc(kind: OperatorKind) {
   return kind === OperatorKind.InfixR;
 }
 
-export class ParseError extends Error {
-
-  public errorText: string;
-
-  constructor(public actual: Syntax, public expected: SyntaxKind[]) {
-    super(`${actual.span!.file.origPath}:${actual.span!.start.line}:${actual.span!.start.column}: expected ${enumOr(expected.map(e => describeKind(e)))} but got ${describeKind(actual.kind)}`);
-    this.errorText = `Expected ${enumOr(expected.map(e => describeKind(e)))} but got ${describeKind(actual.kind)}`
-  }
-
-}
-
-export class HardParseError extends ParseError {
-  
-}
-
 export function getSymbolText(node: BoltSymbol): string {
   switch (node.kind) {
     case SyntaxKind.BoltIdentifier:
@@ -180,7 +146,7 @@ export function getSymbolText(node: BoltSymbol): string {
     case SyntaxKind.BoltVBar:
       return '|';
     default:
-      throw new Error(`Could not convert the node ${kindToString(node.kind)} to the name of an operator`);
+      throw new Error(`Could not convert the node ${kindToString((node as any).kind)} to the name of an operator`);
   }
 }
 
@@ -193,11 +159,7 @@ export interface OperatorInfo {
 
 export function assertToken(node: Token, kind: SyntaxKind, isHardError = false) {
   if (node.kind !== kind) {
-    if (isHardError) {
-      throw new HardParseError(node, [kind]);
-    } else {
-      throw new ParseError(node, [kind]);
-    }
+    throw new ParseError(node, [ kind ]);
   }
 }
 
@@ -442,7 +404,7 @@ export function describeKind(kind: SyntaxKind): string {
   }
 }
 
-export function *getAllReturnStatementsInFunctionBody(body: FunctionBodyElement[]): IterableIterator<BoltReturnStatement> {
+export function *getAllReturnStatementsInFunctionBody(body: FunctionBodyElement[]): Generator<BoltReturnStatement> {
   for (const element of body) {
     switch (element.kind) {
       case SyntaxKind.BoltReturnStatement:

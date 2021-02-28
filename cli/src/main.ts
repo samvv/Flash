@@ -3,28 +3,35 @@
 import "reflect-metadata"
 import "source-map-support/register"
 
+import path from "path";
+
 import yargs from "yargs"
 
 import { Frontend, expandPath } from "@boltlang/compiler"
+import { CompileError } from "@boltlang/compiler/lib/diagnostics";
 
-const BOLT_HOME = expandPath(process.env['BOLT_HOME'] ?? '~/.bolt-compiler')
+process.on('uncaughtException', error => {
+  if (error instanceof CompileError) {
+    error.print();
+    if (error.severity === 'fatal' || error.severity === 'error') {
+      process.exit(1);
+    }
+  } else {
+    throw error;
+  }
+})
+
+const BOLT_HOME = expandPath(process.env['BOLT_HOME'] ?? '~/.bolt-compiler');
 
 function toArray<T>(value: T | T[]): T[] {
   if (Array.isArray(value)) {
-    return value as T[]
+    return value;
   }
   return value === null || value === undefined ? [] : [value]
 }
 
 function error(message: string) {
   console.error(`Error: ${message}`);
-}
-
-function parsePackageResolverFlags(frontend: Frontend, flags: string[]) {
-  for (const flag of flags) {
-    const [pkgName, pkgPath] = flag.split(':');
-    frontend.mapPackageNameToPath(pkgName, pkgPath) 
-  }
 }
 
 yargs
@@ -52,14 +59,12 @@ yargs
       .describe('work-dir', 'The working directory where files will be resolved against.')
       .default('work-dir', '.')
       .boolean('no-std')
-      .describe('no-std', 'Do not build using the standard library.')
-      .string('pkg'),
+      .describe('no-std', 'Do not build using the standard library.'),
     args => {
       const useStd = args['std'] as boolean ?? true;
-      const cwd = process.cwd();
+      const cwd = path.resolve(args['work-dir']);
       const files = toArray(args.files as string[] | string);
       const frontend = new Frontend();
-      parsePackageResolverFlags(frontend, toArray(args.pkg as string | string[]));
       const program = frontend.loadProgramFromFileList(files, cwd, useStd);
       if (!frontend.diagnostics.hasFatal && program !== null) {
         frontend.check(program);
@@ -99,17 +104,15 @@ yargs
 
       const program = frontend.loadProgramFromFileList(files, cwd, useStd);
 
-      if (program === null && !force) {
-        process.exit(1);
+      if (program === null) {
+        process.exit(force ? 0 : 1);
       }
 
-      if (program !== null) {
-        frontend.check(program);
-        if (frontend.diagnostics.hasErrors && !force) {
-          process.exit(1);
-        }
-        frontend.compile(program, args.target);
+      frontend.check(program);
+      if (frontend.diagnostics.hasErrors && !force) {
+        process.exit(1);
       }
+      frontend.compile(program, args.target);
 
     })
 

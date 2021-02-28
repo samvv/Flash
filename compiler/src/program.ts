@@ -2,24 +2,34 @@
 import * as path from "path"
 import { getPackage } from "./common"
 import { Package } from "./package"
-import { SourceFile, Syntax } from "./ast"
+import { BoltSourceFile, NodeFlags, SourceFile, Syntax, SyntaxKind } from "./ast"
 import { FastStringMap, assert, isInsideDirectory, stripExtensions } from "./util";
+
+function isRelativePath(filePath: string): boolean {
+  return filePath.startsWith('.');
+}
 
 export class Program {
 
   private packagesByName = new FastStringMap<string, Package>();
+  private packagesToCompile = new Set<Package>();
 
   private sourceFilesByFilePath = new FastStringMap<string, SourceFile>();
+  private sourceFilesToAutoImport = new Set<SourceFile>();
 
   constructor(
-    private pkgs: Package[]
+    private pkgs: Package[],
+    private target: Package,
   ) {
     for (const pkg of pkgs) {
       if (pkg.name !== null) {
-        this.packagesByName.set(pkg.name, pkg);
+        this.packagesByName.add(pkg.name, pkg);
       }
       for (const sourceFile of pkg.getAllSourceFiles()) {
-        this.sourceFilesByFilePath.set(stripExtensions(sourceFile.span!.file.fullPath), sourceFile);
+        this.sourceFilesByFilePath.add(stripExtensions(sourceFile.span!.file.fullPath), sourceFile);
+        if (sourceFile.flags & NodeFlags.AutoImported) {
+          this.sourceFilesToAutoImport.add(sourceFile);
+        }
       }
     }
   }
@@ -36,19 +46,12 @@ export class Program {
     return this.sourceFilesByFilePath.get(filepath);
   }
 
-  public getAllPackages(): IterableIterator<Package> {
-    return this.pkgs[Symbol.iterator]();
+  public getAllPackages(): Iterable<Package> {
+    return this.pkgs;
   }
 
-  public *getAllGloballyDeclaredSourceFiles(): IterableIterator<SourceFile> {
-    for (const pkg of this.getAllPackages()) {
-      if (pkg.isAutoImported) {
-        const mainLibrarySourceFile = pkg.getMainLibrarySourceFile();
-        if (mainLibrarySourceFile !== null) {
-          yield mainLibrarySourceFile;
-        }
-      }
-    }
+  public getAllGloballyDeclaredSourceFiles(): Iterable<SourceFile> {
+    return this.sourceFilesToAutoImport;
   }
 
   public getPackageNamed(name: string): Package {
@@ -56,25 +59,54 @@ export class Program {
   }
 
   public resolveToSourceFile(importPath: string, fromNode: Syntax): SourceFile | null {
+
+    // This will contain the resulting path to the source file after resolution
+    // has taken place.
     let resolvedFilePath: string;
-    if (importPath.startsWith('.')) {
-      const pkg = getPackage(fromNode);
-      resolvedFilePath = path.join(pkg.rootDir, importPath.substring(2));
-      assert(isInsideDirectory(resolvedFilePath, pkg.rootDir));
+
+    if (isRelativePath(importPath)) {
+
+      // If the import is relative, we need to get the package the import was
+      // defined in and start resolving from there.
+
+      const sourceFile = fromNode.getSourceFile() as BoltSourceFile;
+      assert(sourceFile.kind === SyntaxKind.BoltSourceFile)
+      resolvedFilePath = path.join(sourceFile.pkg!.rootDir, importPath.substring(2));
+      assert(isInsideDirectory(resolvedFilePath, sourceFile.pkg!.rootDir));
+
     } else {
-      const elements = importPath.split('/');
-      const pkg = this.getPackageNamed(elements[0]);
+
+      // If the import is absolute, the first component denotes the package
+      // name and the rest the path to the source file.
+      // Example: yaml/parser
+
+      const pathElements = importPath.split('/');
+
+      const pkg = this.getPackageNamed(pathElements[0]);
+
       let filename: string;
-      if (elements.length === 1) {
-        filename = 'lib';
+
+      if (pathElements.length === 1) {
+
+        // If the import path just referenced the package and not a specific
+        // file then we need to resolve to the default 'lib.bolt' source.
+        filename = 'lib.bolt';
+
       } else {
-        assert(elements.length > 0);
-        assert(!elements.slice(1).some(element => element.startsWith('.')));
-        filename = elements.slice(1).join(path.sep);
+
+        // If the import path referenced a specific file we need to extract the
+        // filename from the full path.
+        filename = pathElements.slice(1).join(path.sep);
+
       }
-      resolvedFilePath = path.join(pkg.rootDir, filename)
+
+      resolvedFilePath = path.join(pkg.basePath, filename);
+
+      // This check is here for security reasons. It should probably be moved
+      // to a separate validation layer.
       assert(isInsideDirectory(resolvedFilePath, pkg.rootDir));
     }
+
     return this.getSourceFile(resolvedFilePath);
   }
 
@@ -83,7 +115,11 @@ export class Program {
       throw new Error(`Could not update ${oldSourceFile.span!.file.origPath} because it was not found in this program.`);
     }
     this.sourceFilesByFilePath.delete(oldSourceFile.span!.file.fullPath);
-    this.sourceFilesByFilePath.set(newSourceFile.span!.file.fullPath, newSourceFile);
+    this.sourceFilesByFilePath.add(newSourceFile.span!.file.fullPath, newSourceFile);
+    this.sourceFilesToAutoImport.delete(oldSourceFile);
+    if (newSourceFile.flags & NodeFlags.AutoImported) {
+      this.sourceFilesToAutoImport.add(newSourceFile);
+    }
   }
 
 }

@@ -279,7 +279,7 @@ class Scope {
       return Scope.scopeCache.get(key);
     } else {
       const newScope = new Scope(resolver, kind, source);
-      Scope.scopeCache.set(key, newScope);
+      Scope.scopeCache.add(key, newScope);
       return newScope;
     }
   }
@@ -363,7 +363,7 @@ class Scope {
         declarations: new Set([ node ]),
         isExported: isExported(node)
       } as SymbolInfo;
-      this.symbols.set(name, sym);
+      this.symbols.add(name, sym);
     }
   }
 

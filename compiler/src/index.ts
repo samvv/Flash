@@ -7,4 +7,4 @@ export * from "./scanner";
 export * from "./parser";
 export * from "./checker";
 export * from "./frontend";
-
+export { prettyPrint } from "./util";

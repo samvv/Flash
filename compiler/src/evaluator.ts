@@ -60,7 +60,7 @@ class Environment {
     if (name in this.symbols) {
       throw new Error(`A variable with the name '${name}' already exists.`);
     }
-    this.symbols.set(name, value);
+    this.symbols.add(name, value);
   }
 
   public updateValue(name: string, newValue: Value) {
@@ -68,7 +68,7 @@ class Environment {
       throw new Error(`Trying to update a variable '${name}' that has not been declared.`);
     }
     this.symbols.delete(name);
-    this.symbols.set(name, newValue); 
+    this.symbols.add(name, newValue); 
   }
 
   public lookup(name: string) {
