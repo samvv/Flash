@@ -1,24 +1,26 @@
 
-import { BoltModifiers, BoltPattern, BoltVariableDeclaration, isBoltAssignStatement, isBoltBlockExpression, isBoltEnumDeclaration, isBoltExpression, isBoltFunctionDeclaration, isBoltFunctionExpression, isBoltRecordDeclaration, isBoltSourceFile, isBoltVariableDeclaration, kindToString, NodeFlags, SourceFile, Syntax, SyntaxKind } from "./ast";
+import {
+  Modifiers,
+  Pattern,
+  isAssignStatement,
+  isBlockExpression,
+  isExpression,
+  isFunctionDeclaration,
+  isFunctionExpression,
+  isSourceFile,
+  isVariableDeclaration,
+  kindToString,
+  NodeFlags,
+  SourceFile,
+  Syntax,
+  SyntaxKind
+} from "./ast";
 import { getSymbolText } from "./common";
 import {
-  CompileError,
-  E_DECLARATION_NOT_FOUND,
-  E_PARAM_COUNT_MISMATCH,
-  E_TYPE_DECLARATION_NOT_FOUND,
-  E_TYPE_ORIGINATED_FROM_HERE,
-  E_FIRST_TYPE_ORIGINATED_FROM_HERE,
-  E_SECOND_TYPE_ORIGINATED_FROM_HERE,
-  E_TYPE_UNIFICATION_FAILURE,
-  E_UNBOUND_FREE_VARIABLE,
-  E_UNINITIALIZED_BINDING,
   TypeNotFoundError,
   UninitializedBindingError,
   BindingNotFoundError,
-  ParamCountMismatchError,
-  UnboundFreeVariableError,
-  UnificationError
-} from "./diagnostics";
+} from "./errors";
 import { Program } from "./program";
 import { assert, FastStringMap } from "./util";
 import {
@@ -29,9 +31,12 @@ import {
   TypeVarSet,
   ArrowType,
   PrimType,
-  TupleType
+  TupleType,
+  intType,
+  boolType,
+  stringType,
+  unifies
 } from "./types"
-import { timeStamp } from "console";
 
 function getFreeVariablesOfType(type: Type): TypeVarSet {
 
@@ -68,15 +73,24 @@ function getFreeVariablesOfType(type: Type): TypeVarSet {
 
 }
 
-const emptyTypeVarSubstitution = new TypeVarSubstitution();
-
 class ForallScheme {
 
+  public typeVars: TypeVarSet;
+
   constructor(
-    public typeVars: TypeVarSet,
+    typeVars: TypeVarSet | Iterable<TypeVar> = [],
     public type: Type,
   ) {
-
+    if (typeVars instanceof TypeVarSet) {
+      this.typeVars = typeVars;
+    } else if (Array.isArray(typeVars)) {
+      this.typeVars = new TypeVarSet;
+      for (const typeVar of typeVars) {
+        this.typeVars.add(typeVar)
+      }
+    } else {
+      throw new Error(`Could not create a type variable set out of the given argument`);
+    }
   }
 
   public getFreeVariables(): TypeVarSet {
@@ -204,34 +218,13 @@ function generalizeType(type: Type, typeEnv: TypeEnv): Scheme {
   }
   return new ForallScheme(freeVariables, type);
 }
-
-function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
-
-  // Binding a type variable to itself means that we don't have to substitute
-  // anything.
-  if (type.kind === TypeKind.TypeVar && type.varId === typeVar.varId) {
-    return emptyTypeVarSubstitution;
-  }
-
-  // This 'occurs check' ensures that a type variable is actually used. If it
-  // isn't used, bindTypeVar would do nothing and we are at risk of having an
-  // infinite loop in the unifier.
-  if (type.hasTypeVariable(typeVar)) {
-    throw new UnboundFreeVariableError(type, typeVar);
-  }
-
-  const substitution = new TypeVarSubstitution();
-  substitution.add(typeVar, type);
-  return substitution
-}
-
 function getNodeIntroducingScope(node: Syntax) {
   let currNode: Syntax | null = node;
   while (true) {
-    if (isBoltSourceFile(currNode)
-    || isBoltBlockExpression(currNode)
-    || isBoltFunctionDeclaration(currNode)
-    || (isBoltFunctionExpression(currNode) && currNode.body !== null)) {
+    if (isSourceFile(currNode)
+    || isBlockExpression(currNode)
+    || isFunctionDeclaration(currNode)
+    || (isFunctionExpression(currNode) && currNode.body !== null)) {
       return currNode;
     }
     if (currNode!.parentNode === null) {
@@ -268,66 +261,71 @@ export class TypeChecker {
 
   private nextPrimTypeId = 1;
 
-  private intTypeId = this.nextPrimTypeId++;
-  private stringTypeId = this.nextPrimTypeId++;
-  private boolTypeId = this.nextPrimTypeId++;
-
   private nodeToType = new FastStringMap<number, Type>();
   private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
   private sourceFileToSubstitution = new FastStringMap<number, TypeVarSubstitution>();
 
+  private builtinTypeEnv = new TypeEnv();
+
   constructor(public program: Program) {
-
+    this.builtinTypeEnv.set('Int', new ForallScheme([], intType))
+    this.builtinTypeEnv.set('String', new ForallScheme([], stringType))
+    this.builtinTypeEnv.set('Bool', new ForallScheme([], boolType))
+    this.builtinTypeEnv.set('false', new ForallScheme([], boolType))
+    this.builtinTypeEnv.set('true', new ForallScheme([], boolType))
+    this.builtinTypeEnv.set('+', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
+    this.builtinTypeEnv.set('-', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
+    this.builtinTypeEnv.set('/', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
+    this.builtinTypeEnv.set('*', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
+    this.builtinTypeEnv.set('==', new ForallScheme([], new ArrowType([ intType, intType ], boolType)))
+    this.builtinTypeEnv.set('!=', new ForallScheme([], new ArrowType([ intType, intType ], boolType)))
   }
-
-  public isIntType(type: Type) {
-    return type.kind === TypeKind.PrimType
-        && type.primId === this.intTypeId;
-  }
-
-  public isStringType(type: Type) {
-    return type.kind === TypeKind.PrimType
-        && type.primId === this.stringTypeId;
-  }
-
-  public isBoolType(type: Type) {
-    return type.kind === TypeKind.PrimType
-        && type.primId === this.boolTypeId;
-  }
-
-  private builtinTypes = new FastStringMap<string, number>([
-    ['int', this.intTypeId],
-    ['String', this.stringTypeId],
-    ['bool', this.boolTypeId]
-  ]);
 
   public registerSourceFile(sourceFile: SourceFile): void {
-    const newTypeEnv = new TypeEnv();
+
+    // This type environment will contain all top-level bindings that are
+    // declared inside the source file.
+    const newTypeEnv = new TypeEnv(this.builtinTypeEnv);
+
+    //for (const type of this.builtinTypes) {
+    //  newTypeEnv.set(type.displayName, new ForallScheme(new TypeVarSet, type));
+    //}
+
     this.nodeToTypeEnv.add(sourceFile.id, newTypeEnv)
+
+    // All contraints that are generated inside this source file and all
+    // imported source files are stored in this array.
     const constraints: Constraint[] = [];
+
+    // We want to be lazy and only import those source files that are actually
+    // used. The auto-imported source files should be scanned anyways because
+    // their bindings might be used without a corresponding import-statement.
     for (const importedSourceFile of this.program.getAllGloballyDeclaredSourceFiles()) {
       this.forwardDeclare(importedSourceFile, newTypeEnv);
       this.checkNode(importedSourceFile, newTypeEnv, constraints);
     }
 
     // If the source file wasn't auto-imported it can't possibly be processed
-    // yet.
+    // yet because the previous loop only took the auto-imported source files.
     if ((sourceFile.flags & NodeFlags.AutoImported) === 0) {
       this.forwardDeclare(sourceFile, newTypeEnv);
       this.checkNode(sourceFile, newTypeEnv, constraints);
     }
+
+    // Save the substitution for future reference.
     this.sourceFileToSubstitution.add(sourceFile.id, this.solveConstraints(constraints));
+
   }
 
   private inferBinding(
-    node: BoltPattern,
+    node: Pattern,
     valueType: Type,
     typeEnv: TypeEnv,
     constraints: Constraint[],
     shouldGeneralize: boolean
   ) {
     switch (node.kind) {
-      case SyntaxKind.BoltExpressionPattern:
+      case SyntaxKind.ExpressionPattern:
         {
           constraints.push([
             valueType,
@@ -335,12 +333,12 @@ export class TypeChecker {
           ])
           break;
         }
-      case SyntaxKind.BoltBindPattern:
+      case SyntaxKind.BindPattern:
         {
           const varName = node.name.text;
           const localValueType = valueType.shallowClone();
           localValueType.node = node;
-          typeEnv.set(varName, shouldGeneralize ? generalizeType(localValueType, typeEnv) : new ForallScheme(new TypeVarSet(), localValueType));
+          typeEnv.set(varName, shouldGeneralize ? generalizeType(localValueType, typeEnv) : new ForallScheme([], localValueType));
           break;
         }
       default:
@@ -348,9 +346,9 @@ export class TypeChecker {
     }
   }
 
-  private inferAssignment(node: BoltPattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
+  private inferAssignment(node: Pattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
     switch (node.kind) {
-      case SyntaxKind.BoltBindPattern:
+      case SyntaxKind.BindPattern:
       {
         const varName = node.name.text;
         const varType = typeEnv.lookup(varName);
@@ -374,7 +372,7 @@ export class TypeChecker {
 
     switch (node.kind) {
 
-      case SyntaxKind.BoltSourceFile:
+      case SyntaxKind.SourceFile:
         {
           for (const element of node.elements) {
             this.forwardDeclare(element, typeEnv);
@@ -382,28 +380,28 @@ export class TypeChecker {
           break;
         }
 
-      case SyntaxKind.BoltReferenceExpression:
-      case SyntaxKind.BoltMatchExpression:
-      case SyntaxKind.BoltConstantExpression:
+      case SyntaxKind.ReferenceExpression:
+      case SyntaxKind.MatchExpression:
+      case SyntaxKind.ConstantExpression:
         break;
 
-      case SyntaxKind.BoltRecordDeclaration:
+      case SyntaxKind.RecordDeclaration:
       {
-        typeEnv.set(node.name.text, new ForallScheme(new TypeVarSet(), new PrimType(this.nextPrimTypeId++, node.name.text, node)));
+        typeEnv.set(node.name.text, new ForallScheme([], new PrimType(node.name.text, undefined, node)));
         break;
       }
 
-      case SyntaxKind.BoltEnumDeclaration:
+      case SyntaxKind.EnumDeclaration:
       {
-        const enumType = new PrimType(this.nextPrimTypeId++, node.name.text, node);
-        typeEnv.set(node.name.text, new ForallScheme(new TypeVarSet, enumType));
+        const enumType = new PrimType(node.name.text, undefined, node);
+        typeEnv.set(node.name.text, new ForallScheme([], enumType));
         for (const member of node.members) {
-          typeEnv.set(node.name.text + '::' + member.text, new ForallScheme(new TypeVarSet, enumType));
+          typeEnv.set(node.name.text + '::' + member.text, new ForallScheme([], enumType));
         }
         break;
       }
 
-      case SyntaxKind.BoltCallExpression:
+      case SyntaxKind.CallExpression:
         {
           this.forwardDeclare(node.operator, typeEnv);
           for (const operand of node.operands) {
@@ -412,28 +410,28 @@ export class TypeChecker {
           break;
         }
 
-      case SyntaxKind.BoltFunctionExpression:
+      case SyntaxKind.FunctionExpression:
         {
           // TODO
           break;
         }
 
-      case SyntaxKind.BoltExpressionStatement:
+      case SyntaxKind.ExpressionStatement:
         {
           this.forwardDeclare(node.expression, typeEnv);
           break;
         }
 
-      case SyntaxKind.BoltVariableDeclaration:
+      case SyntaxKind.VariableDeclaration:
         break;
 
-      case SyntaxKind.BoltAssignStatement:
+      case SyntaxKind.AssignStatement:
         {
           this.forwardDeclare(node.rhs, typeEnv);
           break;
         }
 
-      case SyntaxKind.BoltFunctionDeclaration:
+      case SyntaxKind.FunctionDeclaration:
         {
 
           const name = getSymbolText(node.name);
@@ -453,7 +451,7 @@ export class TypeChecker {
           // defined in. This will also define it in the function's body since
           // the two environments should be linked.
           // FIXME Should this type be generalised?
-          typeEnv.set(name, new ForallScheme(new TypeVarSet(), fnType));
+          typeEnv.set(name, new ForallScheme([], fnType));
 
           break;
         }
@@ -474,7 +472,7 @@ export class TypeChecker {
 
     switch (node.kind) {
 
-      case SyntaxKind.BoltReturnStatement:
+      case SyntaxKind.ReturnStatement:
       {
         assert(returnType !== null);
         const valueType = node.value === null
@@ -487,14 +485,14 @@ export class TypeChecker {
         return valueType;
       }
 
-      case SyntaxKind.BoltCaseStatement:
+      case SyntaxKind.CaseStatement:
         {
           for (const caseNode of node.cases) {
             if (caseNode.test !== null) {
               constraints.push([
                 this.inferNode(caseNode.test, typeEnv, constraints, returnType),
                 // FIXME Should be looked up instead of created.
-                new PrimType(this.boolTypeId, 'Bool', node)
+                boolType
               ]);
             }
             for (const element of caseNode.body) {
@@ -504,7 +502,7 @@ export class TypeChecker {
           return new TupleType([], node);
         }
 
-      case SyntaxKind.BoltMatchExpression:
+      case SyntaxKind.MatchExpression:
         {
 
           const valueType = this.inferNode(node.value, typeEnv, constraints);
@@ -524,7 +522,7 @@ export class TypeChecker {
           return resultType;
         }
 
-      case SyntaxKind.BoltReferenceTypeExpression:
+      case SyntaxKind.ReferenceTypeExpression:
         {
           assert(node.name.modulePath.length === 0);
           const typeName = getSymbolText(node.name.name);
@@ -537,7 +535,7 @@ export class TypeChecker {
           return localType!;
         }
 
-      case SyntaxKind.BoltFunctionDeclaration:
+      case SyntaxKind.FunctionDeclaration:
         {
 
           // By now, the forward declaration has made sure that the function
@@ -582,12 +580,12 @@ export class TypeChecker {
           return fnType;
         }
 
-      case SyntaxKind.BoltVariableDeclaration:
+      case SyntaxKind.VariableDeclaration:
         {
 
           let resultType: Type;
 
-          if (node.modifiers & BoltModifiers.IsMutable) {
+          if (node.modifiers & Modifiers.IsMutable) {
 
             // We will connect all relevant types to this type variable, so that
             // the unifier can solve them.
@@ -633,7 +631,7 @@ export class TypeChecker {
           return resultType;
         }
 
-      case SyntaxKind.BoltConstantExpression:
+      case SyntaxKind.ConstantExpression:
         {
           let typePath;
           if (typeof(node.value) === 'bigint') {
@@ -643,7 +641,7 @@ export class TypeChecker {
           } else if (typeof(node.value) === 'boolean') {
             typePath = 'Bool';
           } else {
-            throw new Error(`Could not infer type of BoltConstantExpression`);
+            throw new Error(`Could not infer type of ConstantExpression`);
           }
           const declaredType = typeEnv.lookup(typePath);
           if (declaredType === null) {
@@ -654,7 +652,7 @@ export class TypeChecker {
           return localType;
         }
 
-      case SyntaxKind.BoltReferenceExpression:
+      case SyntaxKind.ReferenceExpression:
         {
           // Right now we don't support resolving absolute module paths.
           assert(!node.name.isAbsolute);
@@ -676,7 +674,7 @@ export class TypeChecker {
           return localType;
         }
 
-      case SyntaxKind.BoltCallExpression:
+      case SyntaxKind.CallExpression:
         {
           // This type variable will contain the type that the call expression resolves to.
           const returnType = new TypeVar(node);
@@ -704,7 +702,7 @@ export class TypeChecker {
           return returnType;
         }
 
-      case SyntaxKind.BoltFunctionExpression:
+      case SyntaxKind.FunctionExpression:
         {
 
           // Introduce a new scope by starting with a fresh environment.
@@ -734,7 +732,7 @@ export class TypeChecker {
 
         }
 
-      case SyntaxKind.BoltAssignStatement:
+      case SyntaxKind.AssignStatement:
         {
           this.inferAssignment(
             node.lhs,
@@ -753,10 +751,10 @@ export class TypeChecker {
   }
 
   public checkNode(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]): void {
-    if (isBoltExpression(node)
-        || isBoltFunctionDeclaration(node)
-        || isBoltAssignStatement(node)
-        || isBoltVariableDeclaration(node)) {
+    if (isExpression(node)
+        || isFunctionDeclaration(node)
+        || isAssignStatement(node)
+        || isVariableDeclaration(node)) {
       const type = this.inferNode(node, typeEnv, constraints);
       if (!this.nodeToType.has(node.id)) {
         this.nodeToType.add(node.id, type);
@@ -764,16 +762,16 @@ export class TypeChecker {
       return;
     }
     switch (node.kind) {
-      case SyntaxKind.BoltSourceFile:
+      case SyntaxKind.SourceFile:
         for (const element of node.elements) {
           this.checkNode(element, typeEnv, constraints);
         }
         break;
-      case SyntaxKind.BoltExpressionStatement:
+      case SyntaxKind.ExpressionStatement:
         this.checkNode(node.expression, typeEnv, constraints);
         break;
-      case SyntaxKind.BoltEnumDeclaration:
-      case SyntaxKind.BoltRecordDeclaration:
+      case SyntaxKind.EnumDeclaration:
+      case SyntaxKind.RecordDeclaration:
         break;
       default:
         throw new Error(`Could not typecheck node: unknown node type ${kindToString(node.kind)}`);
@@ -796,7 +794,7 @@ export class TypeChecker {
         return substitution;
       }
       const [a, b] = constraints.pop()!;
-      const newSubstitution = this.unifies(a, b);
+      const newSubstitution = unifies(a, b);
       for (let i = 0; i < constraints.length; i++) {
         const constraint = constraints[i];
         constraint[0] = constraint[0].applySubstitution(newSubstitution)
@@ -806,100 +804,6 @@ export class TypeChecker {
     }
   }
 
-  private areTypesEqual(a: Type, b: Type): boolean {
-
-    // This is an early check that is not strictly necessary but might speed up
-    // things a bit.
-    if (a === b) {
-      return true;
-    }
-
-    // We are checking if two types are equal syntactically, so if they are of
-    // a different kind we're already done.
-    if (a.kind !== b.kind) {
-      return false;
-    }
-
-    if (a.kind === TypeKind.PrimType && b.kind === TypeKind.PrimType) {
-      return a.primId === b.primId;
-    }
-
-    if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
-      if (a.paramTypes.length !== b.paramTypes.length
-          || !this.areTypesEqual(a.returnType, b.returnType)) {
-        return false;
-      }
-      for (let i = 0; i < a.paramTypes.length; i++) {
-        if (!this.areTypesEqual(a.paramTypes[i], b.paramTypes[i])) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (a.kind === TypeKind.TypeVar && b.kind === TypeKind.TypeVar) {
-      return a.varId === b.varId;
-    }
-
-    throw new Error(`Unexpected combination of types while checking equality`)
-  }
-
-  private unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
-    let substitution = new TypeVarSubstitution();
-    for (let i = 0; i < leftTypes.length; i++) {
-      const localSubstitution = this.unifies(leftTypes[i], rightTypes[i]);
-      for (let k = i; k < leftTypes.length; k++) {
-        leftTypes[k] = leftTypes[k].applySubstitution(localSubstitution);
-        rightTypes[k] = rightTypes[k].applySubstitution(localSubstitution);
-      }
-      substitution = localSubstitution.composeWith(substitution);
-    }
-    return substitution;
-  }
-
-  private unifies(a: Type, b: Type): TypeVarSubstitution {
-
-    // Two types that have the same structure can be unified as-is without
-    // requiring any substitution to take place.
-    if (this.areTypesEqual(a, b)) {
-      return new TypeVarSubstitution();
-    }
-
-    // The following cases are quite straightforward. We perform some checks
-    // and return an empty substitution if both a and b point to the same type
-    // variable. Otherwise, we create a simple substitution for the type
-    // variable.
-
-    if (a.kind === TypeKind.TypeVar) {
-      return bindTypeVar(a, b);
-    }
-    if (b.kind === TypeKind.TypeVar) {
-      return bindTypeVar(b, a);
-    }
-
-    if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
-
-      // Right now, two arrow types must have the exact same amount of
-      // parameters or else an error occurs. In the future, this might changed
-      // in order to support default arguments.
-      if (a.paramTypes.length !== b.paramTypes.length) {
-        throw new ParamCountMismatchError(a, b);
-      }
-
-      // Becuase the return type depends on the parameter types, and because a
-      // parameter type may eventually depend on a previous parameter (due to
-      // default expressions), we use a unifier that simply runs from left to
-      // right.
-      return this.unifyMany(
-        [...a.paramTypes, a.returnType],
-        [...b.paramTypes, b.returnType]
-      );
-    }
-
-    // If we got here then none of our unification rules matched, so the
-    // combination of types must be invalid.
-    throw new UnificationError(a, b);
-  }
 
   private getTypeEnvForNode(node: Syntax, parentTypeEnv: TypeEnv, shouldClone: boolean): TypeEnv {
     const scopeNode = getNodeIntroducingScope(node)
@@ -917,10 +821,6 @@ export class TypeChecker {
     const type = this.nodeToType.get(node.id);
     const substitution = this.sourceFileToSubstitution.get(node.getSourceFile().id);
     return type.applySubstitution(substitution);
-  }
-
-  public isBuiltinType(name: string) {
-    return this.builtinTypes.has(name);
   }
 
 }

@@ -5,31 +5,17 @@ import { sync as globSync } from "glob"
 import { now } from "moment"
 import * as path from "path"
 
-import { BoltSourceFile, BoltToken, NodeFlags, setParents, SourceFile, Visitor } from "./ast"
-import { TypeChecker } from "./checker"
-import { CheckInvalidFilePaths, CheckTypeAssignments } from "./checks"
-import { getNodeLanguage } from "./common"
-import { BoltfileNotFoundError, CompileError, DiagnosticPrinter, E_NO_BOLTFILE_FOUND_IN_PATH_OR_PARENT_DIRS } from "./diagnostics"
-import { emitNode } from "./emitter"
+import { Token, NodeFlags, setParents, SourceFile } from "./ast"
+import { FileNotFoundError, BoltfileNotFoundError } from "./errors"
+import { DiagnosticPrinter } from "./diagnostics";
 import { Evaluator } from "./evaluator"
-import { Container, Newable } from "./ioc"
+import { Container } from "./ioc"
 import { loadPackageMetadata, Package } from "./package"
 import { Parser } from "./parser"
 import { Program } from "./program"
-import { BoltSymbolResolutionStrategy, SymbolResolver } from "./resolver"
 import { Scanner } from "./scanner"
 import { TextFile } from "./text"
-import CompileBoltToJSTransform from "./transforms/boltToJS"
-import ConstFoldTransform from "./transforms/constFold"
-import ExpandBoltTransform from "./transforms/expand"
-import { TransformManager } from "./transforms/index"
 import { GeneratorStream, getFileStem, MapLike, toArray, upsearchSync, verbose } from "./util"
-
-const targetExtensions: MapLike<string> = {
-  'JS': '.mjs',
-  'Bolt': '.bolt',
-  'C': '.c',
-}
 
 const BOLTFILE_FILENAMES = [
   'Boltfile.yaml',
@@ -122,95 +108,65 @@ export class Frontend {
     this.timing = new Timing();
   }
 
-  public check(program: Program) {
+  //public compile(program: Program, target: string) {
 
-    const resolver = new SymbolResolver(program, new BoltSymbolResolutionStrategy);
+  //  const container = new Container();
+  //  const resolver = new SymbolResolver(program, new SymbolResolutionStrategy);
+  //  for (const sourceFile of program.getAllSourceFiles()) {
+  //    resolver.registerSourceFile(sourceFile as SourceFile);
+  //  }
+  //  const transforms = new TransformManager(container);
+  //  container.bindSelf(transforms);
+  //  container.bindSelf(program);
+  //  container.bindSelf(resolver);
 
-    const container = new Container();
-    container.bindSelf(program);
-    container.bindSelf(resolver);
-    // container.bindSelf(checker);
-    container.bindSelf(this.diagnostics);
+  //  switch (target) {
 
-    const checkClasses: Newable<Visitor>[] = [
-       CheckInvalidFilePaths,
-       //CheckReferences,
-       CheckTypeAssignments,
-    ];
+  //    case "JS":
+  //      transforms.register(ExpandTransform);
+  //      transforms.register(CompileToJSTransform);
+  //      transforms.register(ConstFoldTransform);
+  //      transforms.apply(program);
+  //      break;
 
-    // for (const sourceFile of program.getAllSourceFiles()) {
-    //   resolver.registerSourceFile(sourceFile);
-    // }
+  //    default:
+  //      throw new Error(`"${target}" is an invalid compile target.`);
 
-    for (const sourceFile of program.getAllSourceFiles()) {
-      const checker = new TypeChecker(program);
-      checker.registerSourceFile(sourceFile);
-    }
+  //  }
 
-    // for (const pkg of program.getPackgesToCompile()) {
-    //   for (const sourceFile of pkg.getAllSourceFiles()) {
-    //     for (const node of sourceFile.preorder()) {
-    //       for (const check of checks) {
-    //         check.visit(node);
-    //       }
-    //     }
-    //   }
-    // }
+  //  for (const sourceFile of program.getAllSourceFiles()) {
+  //    fs.mkdirp('.bolt-work');
+  //    fs.writeFileSync(this.mapToTargetFile(sourceFile), emitNode(sourceFile), 'utf8');
+  //  }
 
-  }
+  //}
 
-  public compile(program: Program, target: string) {
-
-    const container = new Container();
-    const resolver = new SymbolResolver(program, new BoltSymbolResolutionStrategy);
-    for (const sourceFile of program.getAllSourceFiles()) {
-      resolver.registerSourceFile(sourceFile as BoltSourceFile);
-    }
-    const transforms = new TransformManager(container);
-    container.bindSelf(transforms);
-    container.bindSelf(program);
-    container.bindSelf(resolver);
-
-    switch (target) {
-
-      case "JS":
-        transforms.register(ExpandBoltTransform);
-        transforms.register(CompileBoltToJSTransform);
-        transforms.register(ConstFoldTransform);
-        transforms.apply(program);
-        break;
-
-      default:
-        throw new Error(`"${target}" is an invalid compile target.`);
-
-    }
-
-    for (const sourceFile of program.getAllSourceFiles()) {
-      fs.mkdirp('.bolt-work');
-      fs.writeFileSync(this.mapToTargetFile(sourceFile), emitNode(sourceFile), 'utf8');
-    }
-
-  }
-
-  private mapToTargetFile(node: SourceFile) {
-    return path.join('.bolt-work', getFileStem(node.span!.file.fullPath) + getDefaultFileExtension(getNodeLanguage(node)));
-  }
+  //private mapToTargetFile(node: SourceFile) {
+  //  return path.join('.bolt-work', getFileStem(node.span!.file.fullPath) + getDefaultFileExtension(getNodeLanguage(node)));
+  //}
 
   public eval(program: Program) {
-    const resolver = new SymbolResolver(program, new BoltSymbolResolutionStrategy);
-    const checker = new TypeChecker(program);
-    const evaluator = new Evaluator(checker)
+
+    // Type-check the program before proceeding
+    program.check();
+
+    const container = new Container();
+    container.bindSelf(program);
+
+    const evaluator = container.createInstance(Evaluator)
+
     for (const sourceFile of program.getAllSourceFiles()) {
       evaluator.eval(sourceFile)
     }
+
   }
 
-  private parseSourceFile(filepath: string, pkg: Package): BoltSourceFile {
+  private parseSourceFile(filepath: string, pkg: Package): SourceFile {
 
     const file = new TextFile(filepath);
     const contents = fs.readFileSync(file.origPath, 'utf8');
     const scanner = new Scanner(file, contents)
-    const tokens = new GeneratorStream<BoltToken>(() => scanner.scan());
+    const tokens = new GeneratorStream<Token>(() => scanner.scan());
     const parser = new Parser();
 
     let sourceFile = parser.parseSourceFile(tokens, pkg);
@@ -220,7 +176,7 @@ export class Frontend {
     return sourceFile;
   }
 
-  private getBoltfilePath(packagePath: string): string {
+  private getfilePath(packagePath: string): string {
     if (isDirectory(packagePath)) {
       for (const fileName of BOLTFILE_FILENAMES) {
         const fullPath = path.resolve(packagePath, fileName);
@@ -228,14 +184,14 @@ export class Frontend {
           return fullPath;
         }
       }
-      throw new BoltfileNotFoundError(packagePath);
+      throw new FileNotFoundError(path.join(packagePath, BOLTFILE_FILENAMES[0]));
     } else {
       return packagePath;
     }
   }
 
   public* loadPackagesFromPath(packagePath: string, isDependency: boolean): Iterable<Package> {
-    const boltfilePath = this.getBoltfilePath(packagePath);
+    const boltfilePath = this.getfilePath(packagePath);
     const rootDir = path.dirname(boltfilePath);
     const data = toArray(loadPackageMetadata(boltfilePath));
     for (const packageSpec of data) {
@@ -258,20 +214,14 @@ export class Frontend {
     }
   }
 
-  public loadProgramFromFileList(filenames: string[], cwd = '.', useStd = true): Program | null {
+  public loadProgramFromFileList(filenames: string[], cwd = '.'): Program | null {
 
     cwd = path.resolve(cwd);
 
     if (filenames.length === 0) {
       const metadataPath = upsearchSync(BOLTFILE_FILENAMES, cwd);
       if (metadataPath === null) {
-        this.diagnostics.add({
-          severity: 'fatal',
-          message: E_NO_BOLTFILE_FOUND_IN_PATH_OR_PARENT_DIRS,
-          args: {
-            path: cwd,
-          }
-        });
+        this.diagnostics.add(new BoltfileNotFoundError(cwd));
         return null;
       }
       filenames.push(metadataPath);
@@ -297,12 +247,5 @@ export class Frontend {
     return new Program(pkgs, anonPkg);
   }
 
-}
-
-function getDefaultFileExtension(target: string) {
-  if (targetExtensions[target] === undefined) {
-    throw new Error(`Could not derive an appropriate extension for target "${target}".`)
-  }
-  return targetExtensions[target];
 }
 

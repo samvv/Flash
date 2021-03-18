@@ -1,13 +1,78 @@
 
-import { Syntax, SyntaxKind, BoltQualName, BoltExpression, kindToString, BoltSyntax, isBoltStatement } from "./ast"
+import { SyntaxKind, kindToString, Syntax, isStatement } from "./ast"
 import { FastStringMap, assert } from "./util"
-import { emitNode } from "./emitter";
+import { boolType, intType, isTypeAssignableTo, PrimType, RecordType, stringType, Type, voidType } from "./types";
 
-export class Record {
+export enum ValueType {
+  Int,
+  Bool,
+  String,
+  Record,
+  Void,
+}
+
+export class VoidValue {
+
+  public readonly type = ValueType.Void;
+
+  public getType() {
+    return voidType;
+  }
+
+}
+
+export class IntValue {
+
+  public readonly type = ValueType.Int;
+
+  constructor(public data: bigint) {
+
+  }
+
+  public getType() {
+    return intType;
+  }
+
+}
+
+export class StringValue {
+
+  public readonly type = ValueType.String;
+
+  constructor(public data: string) {
+
+  }
+
+  public getType() {
+    return stringType;
+  }
+
+}
+
+export class BoolValue {
+
+  public readonly type = ValueType.Bool;
+
+  constructor(public data: boolean) {
+
+  }
+
+  public getType() {
+    return boolType;
+  }
+
+}
+
+export class RecordValue {
+
+  public readonly type = ValueType.Record;
 
   private fields: Map<string, Value>;
 
-  constructor(fields: Iterable<[string, Value]>) {
+  constructor(
+    public primType: PrimType,
+    fields: Iterable<[string, Value]>,
+  ) {
     this.fields = new Map(fields);
   }
 
@@ -15,15 +80,15 @@ export class Record {
     return this.fields[Symbol.iterator]();
   }
 
-  public clone(): Record {
-    return new Record(this.fields);
+  public clone(): RecordValue {
+    return new RecordValue(this.primType, this.fields);
   }
 
   public getFieldValue(name: string): Value {
     if (!this.fields.has(name)) {
       throw new Error(`Trying to access non-existent field ${name} of a record.`);
     }
-    return this.fields.get(name);
+    return this.fields.get(name)!;
   }
 
   public addField(name: string, value: Value): void {
@@ -38,15 +103,22 @@ export class Record {
     this.fields.clear();
   }
 
+  public getType() {
+    const fieldTypes: Array<[string, Type]> = [];
+    for (const [name, value] of this.fields) {
+      fieldTypes.push([name, value.getType()]);
+    }
+    return new RecordType(fieldTypes);
+  }
+
 }
 
 export type Value
-  = string
-  | undefined
-  | boolean
-  | number
-  | bigint
-  | object
+  = IntValue
+  | StringValue
+  | BoolValue
+  | RecordValue
+  | VoidValue
 
 class Environment {
 
@@ -87,10 +159,10 @@ class Environment {
 
 }
 
-function mangle(node: BoltSyntax) {
+function mangle(node: Syntax) {
   switch (node.kind) {
-    case SyntaxKind.BoltIdentifier:
-      return emitNode(node);
+    case SyntaxKind.Identifier:
+      return node.text;
     default:
       throw new Error(`Could not mangle ${kindToString(node.kind)} to a symbol name.`)
   }
@@ -102,7 +174,7 @@ class EvaluationError extends Error {
 
 export class Evaluator {
 
-  constructor(public checker: TypeChecker) {
+  constructor() {
 
   }
 
@@ -110,22 +182,22 @@ export class Evaluator {
 
     switch (node.kind) {
 
-      case SyntaxKind.BoltBindPattern:
+      case SyntaxKind.BindPattern:
       {
         env.setValue(node.name.text, value);
         return true;
       }
 
-      case SyntaxKind.BoltRecordPattern:
+      case SyntaxKind.RecordPattern:
       {
-        if (!(value instanceof Record)) {
+        if (!(value instanceof RecordValue)) {
           throw new EvaluationError(`A deconstructing record pattern received a value that is not a record.`);
         }
         const record = value.clone();
         for (const fieldPatt of node.fields) {
           if (fieldPatt.isRest) {
             if (fieldPatt.name !== null) {
-              env.setValue(fieldPatt.name.text, { data: record.clone() });
+              env.setValue(fieldPatt.name.text, record.clone());
             }
             record.clear();
           } else {
@@ -143,10 +215,10 @@ export class Evaluator {
         return true;
       }
 
-      case SyntaxKind.BoltTypePattern:
+      case SyntaxKind.TypePattern:
       {
-        const expectedType = this.checker.getTypeOfNode(node.type);
-        if (!this.checker.isTypeAssignableTo(expectedType, this.checker.createTypeForValue(value))) {
+        const expectedType = node.typeExpr.getType();
+        if (!isTypeAssignableTo(expectedType, value.getType())) {
           return false;
         }
         return false;
@@ -163,19 +235,19 @@ export class Evaluator {
 
     switch (node.kind) {
 
-      case SyntaxKind.BoltSourceFile:
-      case SyntaxKind.BoltModule:
+      case SyntaxKind.SourceFile:
+      case SyntaxKind.Module:
         for (const element of node.elements) {
-          if (isBoltStatement(element)) {
+          if (isStatement(element)) {
             this.eval(element, env);
           }
         }
-        return { data: undefined }
+        return new VoidValue();
 
-      case SyntaxKind.BoltReferenceExpression:
+      case SyntaxKind.ReferenceExpression:
         return env.lookup(mangle(node.name));
 
-      case SyntaxKind.BoltMatchExpression:
+      case SyntaxKind.MatchExpression:
         const value = this.eval(node.value, env);
         for (const matchArm of node.arms) {
           const matchArmEnv = new Environment(env);
@@ -184,13 +256,22 @@ export class Evaluator {
             return this.eval(matchArm.body, env)
           }
         }
-        return { data: undefined };
+        throw new Error(`Not a single match arm matched and no default arm provided.`);
 
-      case SyntaxKind.BoltConstantExpression:
-        return node.value;
+      case SyntaxKind.ConstantExpression:
+        switch (typeof(node.value)) {
+          case 'boolean':
+            return new BoolValue(node.value);
+          case 'string':
+            return new StringValue(node.value);
+          case 'bigint':
+            return new IntValue(node.value);
+          default:
+            throw new Error(`Could evaluate ConstantExpression: the expression's value was not recognised.`);
+        }
 
       default:
-        throw new Error(`Could not evaluate node ${kindToString(node.kind)}`)
+        throw new Error(`Could not evaluate node ${kindToString(node.kind)}: unrecognised AST node type`)
 
     }
 

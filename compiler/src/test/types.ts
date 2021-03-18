@@ -1,195 +1,176 @@
 
 import test from "ava";
-import { BoltExpressionStatement, setParents } from "../ast";
+import { BindPattern, ExpressionStatement, setParents } from "../ast";
 
-import { BindingNotFoundError, TypeChecker, UnificationError, UninitializedBindingError } from "../checker"
+import { BindingNotFoundError, UnificationError, UninitializedBindingError } from "../errors";
 import { createTokenStream } from "../common";
 import { Parser } from "../parser";
+import { Program } from "../program";
+import { Package } from "../package";
+import {Type, TypeKind} from "../types";
 
 function getTypeOfExpr(input: string) {
-  const sourceFile = parseSourceFile(input + ';');
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  return checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
+  const sourceFile = loadSourceFile(input + ';');
+  return (sourceFile.elements[0] as ExpressionStatement).expression.getType();
 }
 
-function parseSourceFile(input: string) {
+function isIntType(type: Type) {
+  return type.kind === TypeKind.PrimType
+      && type.displayName === 'Int'
+}
+
+function isStringType(type: Type) {
+  return type.kind === TypeKind.PrimType
+      && type.displayName === 'String'
+}
+
+function isBoolType(type: Type) {
+  return type.kind === TypeKind.PrimType
+      && type.displayName === 'Bool'
+}
+
+function loadSourceFile(input: string) {
   const tokens = createTokenStream(input);
   const parser = new Parser();
-  const node = parser.parseSourceFile(tokens);
-  setParents(node);
-  return node;
+  const pkg = new Package('.', null, null, undefined);
+  const sourceFile = parser.parseSourceFile(tokens, pkg);
+  pkg.addSourceFile(sourceFile);
+  setParents(sourceFile);
+  const program = new Program([ pkg ], pkg);
+  program.check();
+  return sourceFile;
 }
 
 test('an integer literal should resolve to the integer type', t => {
-  const sourceFile = parseSourceFile('1;');
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType))
+  const exprType = getTypeOfExpr('1');
+  t.assert(isIntType(exprType))
 });
 
 test('a string literal should resolve to the string type', t => {
-  const sourceFile = parseSourceFile('"foo"');
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isStringType(exprType));
+  const exprType = getTypeOfExpr('"foo"');
+  t.assert(isStringType(exprType));
 })
 
 test('an addition is strongly typed', t => {
-  const sourceFile = parseSourceFile('1 + 1;');
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType));
+  const exprType = getTypeOfExpr('1 + 1');
+  t.assert(isIntType(exprType));
 })
 
 test('an application of the identity function with an integer should resolve to the integer type', t => {
-  const sourceFile = parseSourceFile('(|x| x)(1);');
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType))
+  const exprType = getTypeOfExpr('(|x| x)(1)');
+  t.assert(isIntType(exprType))
 });
 
 test('an application of an anonymous function returning an integer should resolve to the integer type', t => {
-  const sourceFile = parseSourceFile('(| | 1)()')
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType))
+  const exprType = getTypeOfExpr('(| | 1)()')
+  t.assert(isIntType(exprType))
 });
 
 test('an application of an anonymous function returning an integer should resolve to the integer type and ignore its arguments', t => {
-  const sourceFile = parseSourceFile('(|x| 1)("foo")')
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType))
+  const exprType = getTypeOfExpr('(|x| 1)("foo")')
+  t.assert(isIntType(exprType))
 });
 
 test('an application of a function using builtins should work', t => {
-  const sourceFile = parseSourceFile('(|x, y| x + y)(1, 2)')
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[0] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType))
+  const exprType = getTypeOfExpr('(|x, y| x + y)(1, 2)')
+  t.assert(isIntType(exprType))
 });
 
 test('a reference to a variable declaration containing an integer is correctly typed', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 let a = 1;
 a;
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const type = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type));
+  const type = (sourceFile.elements[1] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type));
 });
 
 test('repeated uses of the same variable works without error', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 let a = 1;
 a;
 a + 2;
 3 + a;
 a + a;
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const type1 = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type1));
-  const type2 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type2));
-  const type3 = checker.getTypeOfNode((sourceFile.elements[3] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type3));
-  const type4 = checker.getTypeOfNode((sourceFile.elements[4] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type4));
+  const type1 = (sourceFile.elements[1] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type1));
+  const type2 = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type2));
+  const type3 = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type3));
+  const type4 = (sourceFile.elements[4] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type4));
 });
 
 test('the identity function is polymorphic in its parameter', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 let id = |x| x;
 id(1);
 id("foo");
 `);
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const type1 = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type1));
-  const type2 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
-  t.assert(checker.isStringType(type2));
+  const type1 = (sourceFile.elements[1] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type1));
+  const type2 = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isStringType(type2));
 });
 
 test('a reference to a binding that does not exist is caught as an error', t => {
-  const sourceFile = parseSourceFile(`x;`)
-  const checker = new TypeChecker();
-  const error = t.throws(() => {
-    checker.registerSourceFile(sourceFile);
-  }) as BindingNotFoundError;
+  const error = t.throws(() => { getTypeOfExpr(`x;`) }) as BindingNotFoundError;
   t.assert(error instanceof BindingNotFoundError);
   t.assert(error.name === 'x');
 })
 
 test('a variable is correctly checked for invalid assignments', t => {
-  const sourceFile = parseSourceFile(`
-let mut a: int;
-a = "foo";
-`)
-  const checker = new TypeChecker();
   const error = t.throws(() => {
-    checker.registerSourceFile(sourceFile)
+    loadSourceFile(`
+let mut a: Int;
+a = "foo";
+`);
   }) as UnificationError;
   t.assert(error instanceof UnificationError);
-  t.assert(checker.isStringType(error.left));
-  t.assert(checker.isIntType(error.right));
+  t.assert(isStringType(error.left));
+  t.assert(isIntType(error.right));
 });
 
-
 test('a variable may be reassigned different times with a value of the same type', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 let mut a;
 a = "foo";
 a = "bar";
 a = "baz";
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile)
-  const exprType = checker.getTypeOfNode(sourceFile.elements[0]);
-  t.assert(checker.isStringType(exprType));
+  const exprType = sourceFile.elements[0].getType();
+  t.assert(isStringType(exprType));
 });
 
 test('a variable that is not declared mutable cannot be assigned', t => {
-const sourceFile = parseSourceFile(`
+const error = t.throws(() => {
+  loadSourceFile(`
 let a;
 a = 1;
 `);
-  const checker = new TypeChecker();
-  const error = t.throws(() => {
-    checker.registerSourceFile(sourceFile)
-  });
+    }) as UninitializedBindingError;
   t.assert(error instanceof UninitializedBindingError);
+  t.assert((error.node.bindings as BindPattern).name.text === 'a');
 });
 
 test('an untyped variable will take the first assignment as its type', t => {
-  const sourceFile = parseSourceFile(`
+  const error = t.throws(() => {
+  loadSourceFile(`
 let mut a;
 a = 1;
 a = "foo";
 `)
-  const checker = new TypeChecker();
-  const error = t.throws(() => {
-    checker.registerSourceFile(sourceFile)
   }) as UnificationError;
   t.assert(error instanceof UnificationError);
-  t.assert(checker.isStringType(error.left));
-  t.assert(checker.isIntType(error.right));
+  t.assert(isStringType(error.left));
+  t.assert(isIntType(error.right));
 });
 
 test('a recursive function calculating the factorial can be defined', t => {
-  const sourceFile = parseSourceFile(`
-fn fac(n: int) -> int {
+  const sourceFile = loadSourceFile(`
+fn fac(n: Int) -> Int {
   return match n {
     0 => 1,
     n => n * fac(n-1),
@@ -198,27 +179,23 @@ fn fac(n: int) -> int {
 
 fac(1);
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const type = checker.getTypeOfNode((sourceFile.elements[1] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(type));
+  const type = (sourceFile.elements[1] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(type));
 })
 
 test('a plain variable can only be used after it has been declared', t => {
-  const sourceFile = parseSourceFile(`
+  const error = t.throws(() => {
+    loadSourceFile(`
 let a = b;
 let b = 1;
 `)
-  const checker = new TypeChecker();
-  const error = t.throws(() => {
-    checker.registerSourceFile(sourceFile)
   }) as BindingNotFoundError;
   t.assert(error instanceof BindingNotFoundError);
   t.assert(error.name === 'b');
 });
 
 test('an untyped expression will derive its return type from the function body', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 fn bar(i) {
   return i;
 }
@@ -227,61 +204,53 @@ fn foo(i) {
 }
 foo(1);
 `);
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType));
+  const exprType = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(exprType));
 });
 
 
 test('two fully typed functions that are mutually recursive can be defined', t => {
-  const sourceFile = parseSourceFile(`
-fn a(i: int) -> int {
+  const sourceFile = loadSourceFile(`
+fn a(i: Int) -> Int {
   return b(i / 2);
 }
-fn b(i: int) -> int {
+fn b(i: Int) -> Int {
   return a(i + 1);
 }
 a(1);
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
-  t.assert(checker.isIntType(exprType));
+  const exprType = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(exprType));
 
-  const sourceFile2 = parseSourceFile(`
-fn a(i: int) -> int {
+  const error2 = t.throws(() => {
+    loadSourceFile(`
+fn a(i: Int) -> Int {
   return b("foo");
 }
-fn b(i: int) -> int {
+fn b(i: Int) -> Int {
   return a(i + 1);
 }
 a(1);
-`)
-  const checker2 = new TypeChecker();
-  const error2 = t.throws(() => {
-    checker2.registerSourceFile(sourceFile2);
-  });
+`);
+  }) as UnificationError;
   t.assert(error2 instanceof UnificationError);
 
-  const sourceFile3 = parseSourceFile(`
-fn a(i: int) -> int {
+  const error3 = t.throws(() => {
+    loadSourceFile(`
+fn a(i: Int) -> Int {
   return b(i / 2);
 }
-fn b(i: int) -> int {
+fn b(i: Int) -> Int {
   return a("foo");
 }
 a(1);
 `)
-  const checker3 = new TypeChecker();
-  const error3 = t.throws(() => {
-    checker3.registerSourceFile(sourceFile3);
-  })
+  }) as UnificationError;
   t.assert(error3 instanceof UnificationError);
 });
 
 test('two untyped functions that are mutually recursive can be defined', t => {
-  const sourceFile = parseSourceFile(`
+  const sourceFile = loadSourceFile(`
 fn is_even(i) {
   if (i == 0) {
     return true;
@@ -299,10 +268,8 @@ fn is_odd(i) {
 is_even(1);
 is_odd(2);
 `)
-  const checker = new TypeChecker();
-  checker.registerSourceFile(sourceFile);
-  const exprType1 = checker.getTypeOfNode((sourceFile.elements[2] as BoltExpressionStatement).expression);
-  t.assert(checker.isBoolType(exprType1));
-  const exprType2 = checker.getTypeOfNode((sourceFile.elements[3] as BoltExpressionStatement).expression);
-  t.assert(checker.isBoolType(exprType2));
+  const exprType1 = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isBoolType(exprType1));
+  const exprType2 = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+  t.assert(isBoolType(exprType2));
 });

@@ -97,9 +97,9 @@ export function comparator<T>(pred: (a: T, b: T) => boolean): (a: T, b: T) => nu
   }
 }
 
-export function assert(test: boolean): void {
+export function assert(test: boolean): asserts test  {
   if (!test) {
-    throw new Error(`Invariant violation: an internal sanity check failed.`);
+    throw new Error(`Invariant violation: an internal sanity check failed. See the stack trace for details.`);
   }
 }
 

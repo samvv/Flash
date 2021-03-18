@@ -1,26 +1,23 @@
 import {
-  BoltFunctionBodyElement,
-  BoltReturnStatement,
+  ReturnStatement,
   SyntaxKind,
-  BoltExpression,
+  Expression,
   kindToString,
   Syntax,
-  Token,
-  isBoltPunctuated,
-  BoltSourceFile,
-  isSourceFile,
-  BoltModifiers,
+  isPunctuated,
+  SourceFile,
+  Modifiers,
   FunctionBodyElement,
-  BoltToken,
-  BoltSymbol
+  Token,
+  Symbol,
+  FunctionBody
 } from "./ast";
 
 import { BOLT_SUPPORTED_LANGUAGES } from "./constants"
-import { enumOr, escapeChar, assert, registerClass, GeneratorStream, FastMultiMap } from "./util";
+import { assert, registerClass, GeneratorStream, FastMultiMap } from "./util";
 import { TextSpan, TextPos, TextFile } from "./text";
 import { Scanner } from "./scanner";
-import { convertNodeToSymbolPath, SymbolPath } from "./resolver";
-import { CompileError, E_PARSE_ERROR, E_SCAN_ERROR, ParseError, TYPE_ERROR_MESSAGES } from "./diagnostics";
+import { ParseError, TYPE_ERROR_MESSAGES } from "./errors";
 import { NODE_TYPES } from "./ast"
 import { Package } from "./package";
 
@@ -28,9 +25,9 @@ for (const key of Object.keys(NODE_TYPES)) {
   registerClass((NODE_TYPES as any)[key]);
 }
 
-export function getPackage(node: BoltSourceFile): Package {
-  const sourceFile = node.getSourceFile() as BoltSourceFile;
-  assert(sourceFile.kind === SyntaxKind.BoltSourceFile)
+export function getPackage(node: SourceFile): Package {
+  const sourceFile = node.getSourceFile() as SourceFile;
+  assert(sourceFile.kind === SyntaxKind.SourceFile)
   assert(sourceFile.pkg !== null);
   return sourceFile.pkg!;
 }
@@ -47,15 +44,15 @@ export function getNodeLanguage(node: Syntax): string {
 
 export function createTokenStream(value: any) {
   if (value instanceof Scanner) {
-    return new GeneratorStream<BoltToken>(() => value.scan());
+    return new GeneratorStream<Token>(() => value.scan());
   } else if (typeof(value) === 'string') {
     const scanner = new Scanner(new TextFile('#<anonymous>'), value);
-    return new GeneratorStream<BoltToken>(() => scanner.scan());
-  } else if (isBoltPunctuated(value)) {
+    return new GeneratorStream<Token>(() => scanner.scan());
+  } else if (isPunctuated(value)) {
     const origPos = value.span!.start;
     const startPos = new TextPos(origPos.offset+1, origPos.line, origPos.column+1);
     const scanner = new Scanner(value.span!.file, value.text, startPos);
-    return new GeneratorStream<BoltToken>(() => scanner.scan());
+    return new GeneratorStream<Token>(() => scanner.scan());
   } else {
     throw new Error(`Could not convert ${kindToString(value.kind)} to a token stream.`);
   }
@@ -74,11 +71,9 @@ export function setOrigNodeRange(node: Syntax, startNode: Syntax, endNode: Synta
   node.span = new TextSpan(startNode.span!.file, startNode.span!.start.clone(), endNode.span!.end.clone());
 }
 
-export type BoltFunctionBody = BoltFunctionBodyElement[];
+export function getReturnStatementsInFunctionBody(body: FunctionBody): ReturnStatement[] {
 
-export function getReturnStatementsInFunctionBody(body: BoltFunctionBody): BoltReturnStatement[] {
-
-  const results: BoltReturnStatement[] = [];
+  const results: ReturnStatement[] = [];
 
   for (const element of body) {
     visit(element);
@@ -86,30 +81,30 @@ export function getReturnStatementsInFunctionBody(body: BoltFunctionBody): BoltR
 
   return results;
 
-  function visit(node: BoltFunctionBodyElement) {
+  function visit(node: FunctionBodyElement) {
     switch (node.kind) {
-      case SyntaxKind.BoltReturnStatement:
+      case SyntaxKind.ReturnStatement:
         results.push(node);
         break;
-      case SyntaxKind.BoltExpressionStatement:
+      case SyntaxKind.ExpressionStatement:
         visitExpression(node.expression);
         break;
     }
   }
 
-  function visitExpression(node: BoltExpression) {
+  function visitExpression(node: Expression) {
     switch (node.kind) {
-      case SyntaxKind.BoltBlockExpression:
+      case SyntaxKind.BlockExpression:
         for (const element of node.elements) {
           visit(element);
         }
         break;
-      case SyntaxKind.BoltMatchExpression:
+      case SyntaxKind.MatchExpression:
         for (const arm of node.arms) {
           visitExpression(arm.body);
         }
         break;
-      case SyntaxKind.BoltCallExpression:
+      case SyntaxKind.CallExpression:
         visitExpression(node.operator);
         for (const operand of node.operands) {
           visitExpression(operand);
@@ -131,19 +126,19 @@ export function isRightAssoc(kind: OperatorKind) {
   return kind === OperatorKind.InfixR;
 }
 
-export function getSymbolText(node: BoltSymbol): string {
+export function getSymbolText(node: Symbol): string {
   switch (node.kind) {
-    case SyntaxKind.BoltIdentifier:
+    case SyntaxKind.Identifier:
       return node.text;
-    case SyntaxKind.BoltOperator:
+    case SyntaxKind.Operator:
       return node.text;
-    case SyntaxKind.BoltGtSign:
+    case SyntaxKind.GtSign:
       return '>';
-    case SyntaxKind.BoltExMark:
+    case SyntaxKind.ExMark:
       return '!';
-    case SyntaxKind.BoltLtSign:
+    case SyntaxKind.LtSign:
       return '<';
-    case SyntaxKind.BoltVBar:
+    case SyntaxKind.VBar:
       return '|';
     default:
       throw new Error(`Could not convert the node ${kindToString((node as any).kind)} to the name of an operator`);
@@ -197,7 +192,7 @@ export class OperatorTable {
 export function getModulePathToNode(node: Syntax): string[] {
   let elements = [];
   while (true) {
-    if (node.kind === SyntaxKind.BoltModule) {
+    if (node.kind === SyntaxKind.Module) {
       for (const element of node.name) {
         elements.unshift(element.text);
       }
@@ -212,234 +207,157 @@ export function getModulePathToNode(node: Syntax): string[] {
 
 export function isExported(node: Syntax) { 
   switch (node.kind) {
-    case SyntaxKind.BoltVariableDeclaration:
-    case SyntaxKind.BoltFunctionDeclaration:
-    case SyntaxKind.BoltModule:
-    case SyntaxKind.BoltRecordDeclaration:
-    case SyntaxKind.BoltTypeAliasDeclaration:
-    case SyntaxKind.BoltTraitDeclaration:
-    case SyntaxKind.BoltImplDeclaration:
-      return (node.modifiers & BoltModifiers.IsPublic) > 0;
+    case SyntaxKind.VariableDeclaration:
+    case SyntaxKind.FunctionDeclaration:
+    case SyntaxKind.Module:
+    case SyntaxKind.RecordDeclaration:
+    case SyntaxKind.TypeAliasDeclaration:
+    case SyntaxKind.TraitDeclaration:
+    case SyntaxKind.ImplDeclaration:
+      return (node.modifiers & Modifiers.IsPublic) > 0;
     default:
       return false;
   }
 }
 
-export function hasTypeError(node: Syntax) {
-  for (const message of TYPE_ERROR_MESSAGES) {
-    if (hasDiagnostic(node, message)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function hasDiagnostic(node: Syntax, message: string): boolean {
-  return node.errors.some(d => d.message === message);
-}
-
-export function getFullyQualifiedPathToNode(node: Syntax): SymbolPath {
-  const symbolPath = convertNodeToSymbolPath(node);
-  while (true) {
-    const parentNode = node.parentNode;
-    if (parentNode === null) {
-      break;
-    }
-    node = parentNode;
-    if (node.kind === SyntaxKind.BoltModule) {
-      for (const element of node.name) {
-        symbolPath.modulePath.unshift(element.text);
-      }
-    }
-  }
-  return symbolPath;
-}
+//export function getFullyQualifiedPathToNode(node: Syntax): SymbolPath {
+//  const symbolPath = convertNodeToSymbolPath(node);
+//  while (true) {
+//    const parentNode = node.parentNode;
+//    if (parentNode === null) {
+//      break;
+//    }
+//    node = parentNode;
+//    if (node.kind === SyntaxKind.Module) {
+//      for (const element of node.name) {
+//        symbolPath.modulePath.unshift(element.text);
+//      }
+//    }
+//  }
+//  return symbolPath;
+//}
 
 export function describeKind(kind: SyntaxKind): string {
   switch (kind) {
-    case SyntaxKind.BoltImportKeyword:
+    case SyntaxKind.ImportKeyword:
       return "'import'";
-    case SyntaxKind.BoltExportKeyword:
+    case SyntaxKind.ExportKeyword:
       return "'export'";
-    case SyntaxKind.BoltExMark:
+    case SyntaxKind.ExMark:
       return "'!'";
-    case SyntaxKind.JSIdentifier:
-      return "a JavaScript identifier"
-    case SyntaxKind.BoltIdentifier:
+    case SyntaxKind.Identifier:
       return "an identifier"
-    case SyntaxKind.BoltOperator:
+    case SyntaxKind.Operator:
       return "an operator"
-    case SyntaxKind.BoltStringLiteral:
+    case SyntaxKind.StringLiteral:
       return "a string"
-    case SyntaxKind.BoltIntegerLiteral:
+    case SyntaxKind.IntegerLiteral:
       return "an integer"
-    case SyntaxKind.BoltFnKeyword:
+    case SyntaxKind.FnKeyword:
       return "'fn'"
-    case SyntaxKind.BoltWhereKeyword:
+    case SyntaxKind.WhereKeyword:
       return "'where'";
-    case SyntaxKind.BoltQuoteKeyword:
+    case SyntaxKind.QuoteKeyword:
       return "'quote'";
-    case SyntaxKind.BoltModKeyword:
+    case SyntaxKind.ModKeyword:
       return "'mod'";
-    case SyntaxKind.BoltForeignKeyword:
+    case SyntaxKind.ForeignKeyword:
       return "'foreign'"
-    case SyntaxKind.BoltMatchKeyword:
+    case SyntaxKind.MatchKeyword:
       return "'match'";
-    case SyntaxKind.BoltYieldKeyword:
+    case SyntaxKind.YieldKeyword:
       return "'yield'";
-    case SyntaxKind.BoltReturnKeyword:
+    case SyntaxKind.ReturnKeyword:
       return "'return'";
-    case SyntaxKind.BoltPubKeyword:
+    case SyntaxKind.PubKeyword:
       return "'pub'"
-    case SyntaxKind.BoltLetKeyword:
+    case SyntaxKind.LetKeyword:
       return "'let'"
-    case SyntaxKind.BoltSemi:
+    case SyntaxKind.Semi:
       return "';'"
-    case SyntaxKind.BoltColon:
+    case SyntaxKind.Colon:
       return "':'"
-    case SyntaxKind.BoltColonColon:
+    case SyntaxKind.ColonColon:
       return "'::'";
-    case SyntaxKind.BoltDot:
+    case SyntaxKind.Dot:
       return "'.'"
-    case SyntaxKind.JSDot:
-      return "'.'"
-    case SyntaxKind.JSDotDotDot:
-      return "'...'"
-    case SyntaxKind.BoltRArrow:
+    case SyntaxKind.RArrow:
       return "'->'"
-    case SyntaxKind.BoltVBar:
+    case SyntaxKind.VBar:
       return "'|'";
-    case SyntaxKind.BoltComma:
+    case SyntaxKind.Comma:
       return "','"
-    case SyntaxKind.BoltModKeyword:
+    case SyntaxKind.ModKeyword:
       return "'mod'"
-    case SyntaxKind.BoltStructKeyword:
+    case SyntaxKind.StructKeyword:
       return "'struct'"
-    case SyntaxKind.BoltEnumKeyword:
+    case SyntaxKind.EnumKeyword:
       return "'enum'"
-    case SyntaxKind.BoltTypeKeyword:
+    case SyntaxKind.TypeKeyword:
       return "'type'";
-    case SyntaxKind.BoltBraced:
+    case SyntaxKind.Braced:
       return "'{' .. '}'"
-    case SyntaxKind.BoltBracketed:
+    case SyntaxKind.Bracketed:
       return "'[' .. ']'"
-    case SyntaxKind.BoltParenthesized:
+    case SyntaxKind.Parenthesized:
       return "'(' .. ')'"
     case SyntaxKind.EndOfFile:
       return "'}', ')', ']' or end-of-file"
-    case SyntaxKind.BoltLtSign:
+    case SyntaxKind.LtSign:
       return "'<'";
-    case SyntaxKind.BoltGtSign:
+    case SyntaxKind.GtSign:
       return "'<'";
-    case SyntaxKind.BoltEqSign:
+    case SyntaxKind.EqSign:
       return "'='";
-    case SyntaxKind.JSOpenBrace:
-      return "'{'";
-    case SyntaxKind.JSCloseBrace:
-      return "'}'";
-    case SyntaxKind.JSOpenBracket:
-      return "'['";
-    case SyntaxKind.JSCloseBracket:
-      return "']'";
-    case SyntaxKind.JSOpenParen:
-      return "'('";
-    case SyntaxKind.JSCloseParen:
-      return "')'";
-    case SyntaxKind.JSSemi:
-      return "';'";
-    case SyntaxKind.JSComma:
-      return "','";
-    case SyntaxKind.BoltTraitKeyword:
+    case SyntaxKind.TraitKeyword:
       return "'trait'";
-    case SyntaxKind.BoltTraitKeyword:
+    case SyntaxKind.TraitKeyword:
       return "'impl'";
-    case SyntaxKind.BoltImplKeyword:
+    case SyntaxKind.ImplKeyword:
       return "'impl'";
-    case SyntaxKind.BoltForKeyword:
+    case SyntaxKind.ForKeyword:
       return "'for'";
-    case SyntaxKind.JSMulOp:
-      return "'*'";
-    case SyntaxKind.JSAddOp:
-      return "'+'";
-    case SyntaxKind.JSDivOp:
-      return "'/'";
-    case SyntaxKind.JSSubOp:
-      return "'-'";
-    case SyntaxKind.JSLtOp:
-      return "'<'";
-    case SyntaxKind.JSGtOp:
-      return "'>'";
-    case SyntaxKind.JSBOrOp:
-      return "'|'";
-    case SyntaxKind.JSBXorOp:
-      return "'^'";
-    case SyntaxKind.JSBAndOp:
-      return "'&'";
-    case SyntaxKind.JSBNotOp:
-      return "'~'";
-    case SyntaxKind.JSNotOp:
-      return "'~'";
-    case SyntaxKind.JSString:
-      return "a JavaScript string"
-    case SyntaxKind.JSReturnKeyword:
-      return "'return'";
-    case SyntaxKind.JSForKeyword:
-      return "'for'";
-    case SyntaxKind.JSTryKeyword:
-      return "'try'";
-    case SyntaxKind.BoltRArrowAlt:
+    case SyntaxKind.RArrowAlt:
       return "'=>'";
-    case SyntaxKind.BoltBraced:
+    case SyntaxKind.Braced:
       return "'{ ... }'";
-    case SyntaxKind.BoltIfKeyword:
+    case SyntaxKind.IfKeyword:
       return "'if'";
-    case SyntaxKind.BoltElseKeyword:
+    case SyntaxKind.ElseKeyword:
       return "'else'";
-    case SyntaxKind.BoltTypeAliasDeclaration:
+    case SyntaxKind.TypeAliasDeclaration:
       return "a type alias";
-    case SyntaxKind.BoltMacroCall:
+    case SyntaxKind.MacroCall:
       return "a macro call";
     default:
       throw new Error(`failed to describe ${kindToString(kind)}`)
   }
 }
 
-export function *getAllReturnStatementsInFunctionBody(body: FunctionBodyElement[]): Generator<BoltReturnStatement> {
+export function *getAllReturnStatementsInFunctionBody(body: FunctionBodyElement[]): Generator<ReturnStatement> {
   for (const element of body) {
     switch (element.kind) {
-      case SyntaxKind.BoltReturnStatement:
+      case SyntaxKind.ReturnStatement:
       {
         yield element;
         break;
       }
-      case SyntaxKind.BoltCaseStatement:
+      case SyntaxKind.CaseStatement:
       {
         for (const caseNode of element.cases) {
           yield* getAllReturnStatementsInFunctionBody(caseNode.body);
         }
         break;
       }
-      case SyntaxKind.BoltConditionalStatement:
+      case SyntaxKind.ConditionalStatement:
       {
         for (const caseNode of element.cases) {
           yield* getAllReturnStatementsInFunctionBody(caseNode.body);
         }
         break;
       }
-      case SyntaxKind.JSTryCatchStatement:
-      {
-        yield* getAllReturnStatementsInFunctionBody(element.tryBlock)
-        if (element.catchBlock !== null) {
-          yield* getAllReturnStatementsInFunctionBody(element.catchBlock.elements)
-        }
-        if (element.finalBlock !== null) {
-          yield* getAllReturnStatementsInFunctionBody(element.finalBlock)
-        }
-        break;
-      }
-      case SyntaxKind.JSExpressionStatement:
-      case SyntaxKind.BoltExpressionStatement:
-      case SyntaxKind.JSImportDeclaration:
+      case SyntaxKind.ExpressionStatement:
+        // TODO Find return statements in expression blocks
         break;
       default:
         throw new Error(`I did not know how to find return statements in ${kindToString(element.kind)}`);

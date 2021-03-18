@@ -6,7 +6,7 @@ import AJV from "ajv"
 import yaml from "js-yaml"
 import semver from "semver"
 
-import { FileNotFoundError, InvalidBoltfileError} from "./diagnostics";
+import { FileNotFoundError, InvalidBoltfileError} from "./errors";
 import { FastStringMap } from "./util";
 import { SourceFile } from "./ast";
 import { Boltfile } from "./boltfile"

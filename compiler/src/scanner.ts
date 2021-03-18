@@ -1,5 +1,6 @@
 
-import { EOF, ScanError } from "./common"
+import { EOF } from "./common"
+import { ScanError } from "./errors"
 
 import {
   TextFile,
@@ -8,50 +9,50 @@ import {
 } from "./text"
 
 import {
-  BoltToken,
-  createBoltImportKeyword,
-  createBoltRArrowAlt,
+  Token,
+  createImportKeyword,
+  createRArrowAlt,
   createEndOfFile,
-  createBoltIdentifier,
-  createBoltRArrow,
-  createBoltOperator,
-  createBoltParenthesized,
-  createBoltBraced,
-  createBoltBracketed,
-  createBoltSemi,
-  createBoltComma,
-  createBoltStringLiteral,
-  createBoltIntegerLiteral,
-  createBoltColon,
-  createBoltDot,
-  createBoltEqSign,
-  createBoltPubKeyword,
-  createBoltMutKeyword,
-  createBoltStructKeyword,
-  createBoltEnumKeyword,
-  createBoltForeignKeyword,
-  createBoltAssignment,
-  createBoltYieldKeyword,
-  createBoltReturnKeyword,
-  createBoltFnKeyword,
-  createBoltLArrow,
-  createBoltDotDot,
-  createBoltLtSign,
-  createBoltGtSign,
-  createBoltModKeyword,
-  createBoltTypeKeyword,
-  createBoltForKeyword,
-  createBoltTraitKeyword,
-  createBoltImplKeyword,
-  createBoltMatchKeyword,
-  createBoltQuoteKeyword,
-  createBoltLetKeyword,
-  createBoltVBar,
-  createBoltColonColon,
-  createBoltExMark,
-  createBoltWhereKeyword,
-  createBoltIfKeyword,
-  createBoltElseKeyword,
+  createIdentifier,
+  createRArrow,
+  createOperator,
+  createParenthesized,
+  createBraced,
+  createBracketed,
+  createSemi,
+  createComma,
+  createStringLiteral,
+  createIntegerLiteral,
+  createColon,
+  createDot,
+  createEqSign,
+  createPubKeyword,
+  createMutKeyword,
+  createStructKeyword,
+  createEnumKeyword,
+  createForeignKeyword,
+  createAssignment,
+  createYieldKeyword,
+  createReturnKeyword,
+  createFnKeyword,
+  createLArrow,
+  createDotDot,
+  createLtSign,
+  createGtSign,
+  createModKeyword,
+  createTypeKeyword,
+  createForKeyword,
+  createTraitKeyword,
+  createImplKeyword,
+  createMatchKeyword,
+  createQuoteKeyword,
+  createLetKeyword,
+  createVBar,
+  createColonColon,
+  createExMark,
+  createWhereKeyword,
+  createIfKeyword,
+  createElseKeyword,
 } from "./ast"
 
 export enum PunctType {
@@ -261,7 +262,7 @@ export class Scanner {
     }
   }
 
-  public scan(): BoltToken {
+  public scan(): Token {
 
     while (true) {
 
@@ -287,17 +288,17 @@ export class Scanner {
       switch (c0) {
         case ';':
           this.getChar();
-          return createBoltSemi(new TextSpan(this.file, startPos, this.currPos.clone()));
+          return createSemi(new TextSpan(this.file, startPos, this.currPos.clone()));
         case ',':
           this.getChar();
-          return createBoltComma(new TextSpan(this.file, startPos, this.currPos.clone()));
+          return createComma(new TextSpan(this.file, startPos, this.currPos.clone()));
         case ':':
           this.getChar();
           if (this.peekChar() === ':') {
             this.getChar();
-            return createBoltColonColon(new TextSpan(this.file, startPos, this.currPos.clone()));
+            return createColonColon(new TextSpan(this.file, startPos, this.currPos.clone()));
           }
-          return createBoltColon(new TextSpan(this.file, startPos, this.currPos.clone()));
+          return createColon(new TextSpan(this.file, startPos, this.currPos.clone()));
       }
 
       if (c0 === '"') {
@@ -324,13 +325,13 @@ export class Scanner {
 
         const endPos = this.currPos.clone();
 
-        return createBoltStringLiteral(text, new TextSpan(this.file, startPos, endPos))
+        return createStringLiteral(text, new TextSpan(this.file, startPos, endPos))
 
       } else if (isDigit(c0)) {
 
         const digits = this.takeWhile(isDigit);
         const endPos = this.currPos.clone();
-        return createBoltIntegerLiteral(BigInt(digits), new TextSpan(this.file, startPos, endPos));
+        return createIntegerLiteral(BigInt(digits), new TextSpan(this.file, startPos, endPos));
 
       } else if (isOpenPunct(c0)) {
 
@@ -366,11 +367,11 @@ export class Scanner {
 
         switch (punctType) {
           case PunctType.Brace:
-            return createBoltBraced(text, new TextSpan(this.file, startPos, endPos));
+            return createBraced(text, new TextSpan(this.file, startPos, endPos));
           case PunctType.Paren:
-            return createBoltParenthesized(text, new TextSpan(this.file, startPos, endPos));
+            return createParenthesized(text, new TextSpan(this.file, startPos, endPos));
           case PunctType.Bracket:
-            return createBoltBracketed(text, new TextSpan(this.file, startPos, endPos));
+            return createBracketed(text, new TextSpan(this.file, startPos, endPos));
           default:
             throw new Error("Got an invalid state.")
         }
@@ -381,27 +382,27 @@ export class Scanner {
         const endPos = this.currPos.clone();
         const span = new TextSpan(this.file, startPos, endPos);
         switch (name) {
-          case 'pub':     return createBoltPubKeyword(span);
-          case 'mod':     return createBoltModKeyword(span);
-          case 'fn':      return createBoltFnKeyword(span);
-          case 'where':   return createBoltWhereKeyword(span);
-          case 'return':  return createBoltReturnKeyword(span);
-          case 'match':   return createBoltMatchKeyword(span);
-          case 'yield':   return createBoltYieldKeyword(span);
-          case 'for':     return createBoltForKeyword(span);
-          case 'trait':   return createBoltTraitKeyword(span);
-          case 'impl':    return createBoltImplKeyword(span);
-          case 'type':    return createBoltTypeKeyword(span);
-          case 'import':  return createBoltImportKeyword(span);
-          case 'foreign': return createBoltForeignKeyword(span);
-          case 'let':     return createBoltLetKeyword(span);
-          case 'mut':     return createBoltMutKeyword(span);
-          case 'struct':  return createBoltStructKeyword(span);
-          case 'quote':   return createBoltQuoteKeyword(span);
-          case 'enum':    return createBoltEnumKeyword(span);
-          case 'if':      return createBoltIfKeyword(span);
-          case 'else':    return createBoltElseKeyword(span);
-          default:        return createBoltIdentifier(name, span);
+          case 'pub':     return createPubKeyword(span);
+          case 'mod':     return createModKeyword(span);
+          case 'fn':      return createFnKeyword(span);
+          case 'where':   return createWhereKeyword(span);
+          case 'return':  return createReturnKeyword(span);
+          case 'match':   return createMatchKeyword(span);
+          case 'yield':   return createYieldKeyword(span);
+          case 'for':     return createForKeyword(span);
+          case 'trait':   return createTraitKeyword(span);
+          case 'impl':    return createImplKeyword(span);
+          case 'type':    return createTypeKeyword(span);
+          case 'import':  return createImportKeyword(span);
+          case 'foreign': return createForeignKeyword(span);
+          case 'let':     return createLetKeyword(span);
+          case 'mut':     return createMutKeyword(span);
+          case 'struct':  return createStructKeyword(span);
+          case 'quote':   return createQuoteKeyword(span);
+          case 'enum':    return createEnumKeyword(span);
+          case 'if':      return createIfKeyword(span);
+          case 'else':    return createElseKeyword(span);
+          default:        return createIdentifier(name, span);
         }
 
       } else if (isSymbol(c0)) {
@@ -411,25 +412,25 @@ export class Scanner {
         const span = new TextSpan(this.file, startPos, endPos);
 
         switch (text) {
-          case '!': return createBoltExMark(span);
-          case '|': return createBoltVBar(span);
-          case '->': return createBoltRArrow(span);
-          case '=>': return createBoltRArrowAlt(span);
-          case '<-': return createBoltLArrow(span);
-          case '<':  return createBoltLtSign(span);
-          case '>':  return createBoltGtSign(span);
-          case '.':  return createBoltDot(span);
-          case '..': return createBoltDotDot(span);
-          case '=':  return createBoltEqSign(span);
-          case '==': return createBoltOperator(text, span);
+          case '!': return createExMark(span);
+          case '|': return createVBar(span);
+          case '->': return createRArrow(span);
+          case '=>': return createRArrowAlt(span);
+          case '<-': return createLArrow(span);
+          case '<':  return createLtSign(span);
+          case '>':  return createGtSign(span);
+          case '.':  return createDot(span);
+          case '..': return createDotDot(span);
+          case '=':  return createEqSign(span);
+          case '==': return createOperator(text, span);
         }
 
         if (text.endsWith('=')) {
           const operator = text.substring(0, text.length-1);
-          return createBoltAssignment(operator.length === 0 ? null : operator, span);
+          return createAssignment(operator.length === 0 ? null : operator, span);
         }
 
-        return createBoltOperator(text, span);
+        return createOperator(text, span);
 
       } else {
 

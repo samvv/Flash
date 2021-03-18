@@ -8,7 +8,7 @@ import path from "path";
 import yargs from "yargs"
 
 import { Frontend, expandPath } from "@boltlang/compiler"
-import { CompileError } from "@boltlang/compiler/lib/diagnostics";
+import { CompileError } from "@boltlang/compiler";
 
 process.on('uncaughtException', error => {
   if (error instanceof CompileError) {
@@ -65,9 +65,9 @@ yargs
       const cwd = path.resolve(args['work-dir']);
       const files = toArray(args.files as string[] | string);
       const frontend = new Frontend();
-      const program = frontend.loadProgramFromFileList(files, cwd, useStd);
+      const program = frontend.loadProgramFromFileList(files, cwd);
       if (!frontend.diagnostics.hasFatal && program !== null) {
-        frontend.check(program);
+        program.check();
       }
       if (frontend.diagnostics.hasErrors || frontend.diagnostics.hasFatal) {
         process.exit(1);
@@ -100,20 +100,13 @@ yargs
 
       const frontend = new Frontend();
 
-      parsePackageResolverFlags(frontend, toArray(args.pkg as string | string[]));
-
-      const program = frontend.loadProgramFromFileList(files, cwd, useStd);
+      const program = frontend.loadProgramFromFileList(files, cwd);
 
       if (program === null) {
         process.exit(force ? 0 : 1);
       }
 
-      frontend.check(program);
-      if (frontend.diagnostics.hasErrors && !force) {
-        process.exit(1);
-      }
       frontend.compile(program, args.target);
-
     })
 
   .command(
@@ -127,14 +120,14 @@ yargs
       .default('work-dir', '.')
       .boolean('skip-type-checks')
       .describe('skip-type-checks', 'Do not check the program for common mistakes before evaluating.')
-      .default('skip-type-checks', true)
+      .default('skip-type-checks', false)
       .boolean('force')
       .describe('force', 'Ignore as much errors as possible.')
       .default('force', false)
 
     , args => {
 
-      const runTypeChecker = !(args["skip-type-checks"] as boolean);
+      const skipTypeChecks = args["skip-type-checks"];
       const force = args.force as boolean;
       const useStd = args['std'] as boolean ?? true;
       const cwd = process.cwd();
@@ -142,17 +135,15 @@ yargs
 
       const frontend = new Frontend();
 
-      parsePackageResolverFlags(frontend, toArray(args.pkg as string | string[]));
-
-      const program = frontend.loadProgramFromFileList(files, cwd, useStd);
+      const program = frontend.loadProgramFromFileList(files, cwd);
 
       if (program === null && !force) {
         process.exit(1);
       }
 
       if (program !== null) {
-        if (runTypeChecker) {
-          frontend.check(program);
+        if (!skipTypeChecks) {
+          program.check();
         }
         if (frontend.diagnostics.hasErrors && !force) {
           process.exit(1);

@@ -1,9 +1,9 @@
 
 import * as path from "path"
-import { getPackage } from "./common"
 import { Package } from "./package"
-import { BoltSourceFile, NodeFlags, SourceFile, Syntax, SyntaxKind } from "./ast"
+import { NodeFlags, SourceFile, Syntax } from "./ast"
 import { FastStringMap, assert, isInsideDirectory, stripExtensions } from "./util";
+import { TypeChecker } from "./checker";
 
 function isRelativePath(filePath: string): boolean {
   return filePath.startsWith('.');
@@ -46,6 +46,14 @@ export class Program {
     return this.sourceFilesByFilePath.get(filepath);
   }
 
+  public check() {
+    for (const sourceFile of this.getAllSourceFiles()) {
+      const checker = new TypeChecker(this);
+      checker.registerSourceFile(sourceFile);
+      sourceFile.checker = checker;
+    }
+  }
+
   public getAllPackages(): Iterable<Package> {
     return this.pkgs;
   }
@@ -69,8 +77,7 @@ export class Program {
       // If the import is relative, we need to get the package the import was
       // defined in and start resolving from there.
 
-      const sourceFile = fromNode.getSourceFile() as BoltSourceFile;
-      assert(sourceFile.kind === SyntaxKind.BoltSourceFile)
+      const sourceFile = fromNode.getSourceFile();
       resolvedFilePath = path.join(sourceFile.pkg!.rootDir, importPath.substring(2));
       assert(isInsideDirectory(resolvedFilePath, sourceFile.pkg!.rootDir));
 
