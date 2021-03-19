@@ -1,13 +1,12 @@
 import { Syntax } from "./ast";
-import {CompileError, ParamCountMismatchError, UnboundFreeVariableError, UnificationError} from "./errors";
-import { FastStringMap, prettyPrint, prettyPrintTag } from "./util";
+import { CompileError, ParamCountMismatchError, UnboundFreeVariableError, UnificationError } from "./errors";
+import { FastStringMap, prettyPrintTag } from "./util";
 
 export enum TypeKind {
   TypeVar,
   PrimType,
   ArrowType,
   TupleType,
-  RecordType,
 }
 
 export type Type
@@ -15,10 +14,23 @@ export type Type
   | PrimType
   | ArrowType
   | TupleType
-  | RecordType
 
-export interface TypeBase {
-  kind: TypeKind;
+export abstract class TypeBase {
+
+  public abstract kind: TypeKind;
+
+  constructor(public node: Syntax | null) {
+
+  }
+
+  public abstract applySubstitution(substitution: TypeVarSubstitution): Type;
+
+  public abstract hasTypeVariable(typeVar: TypeVar): boolean;
+
+  public abstract deepClone(): Type;
+
+  public abstract [prettyPrintTag](): string;
+
 }
 
 function createGenerator(defaultPrefix: string) {
@@ -36,29 +48,22 @@ function createGenerator(defaultPrefix: string) {
 
 const generateTypeVarId = createGenerator('a');
 
-const classTag = Symbol('class tag');
+export class TypeVar extends TypeBase {
 
-const typeClass = Symbol('type class');
-const nodeClass = Symbol('node class');
-
-export class TypeVar implements TypeBase {
-
-  public readonly [classTag] = typeClass;
-
-  public readonly kind: TypeKind.TypeVar = TypeKind.TypeVar;
+  public readonly kind = TypeKind.TypeVar;
 
   constructor(
-    public node: Syntax | null = null,
+    node: Syntax | null = null,
     public varId = generateTypeVarId()
   ) {
-
+    super(node);
   }
 
   public hasTypeVariable(typeVar: TypeVar): boolean {
     return typeVar.varId === this.varId;
   }
 
-  public shallowClone(): TypeVar {
+  public deepClone(): TypeVar {
     return new TypeVar(this.node, this.varId);
   }
 
@@ -66,7 +71,7 @@ export class TypeVar implements TypeBase {
     if (substitution.has(this)) {
       // FIXME How can we guarantee that a shallow clone is enough when the
       //       original algorithm performs a deep clone?
-      const type = substitution.get(this).shallowClone();
+      const type = substitution.get(this).deepClone();
       return type;
     } else {
       return this;
@@ -79,25 +84,23 @@ export class TypeVar implements TypeBase {
 
 }
 
-export class TupleType implements TypeBase {
-
-  public readonly [classTag] = typeClass;
+export class TupleType extends TypeBase {
 
   public readonly kind = TypeKind.TupleType;
 
   constructor(
     public elements: Type[],
-    public node: Syntax | null = null
+    node: Syntax | null = null
   ) {
-
+    super(node);
   }
 
   public hasTypeVariable(typeVar: TypeVar): boolean {
     return this.elements.some(type => type.hasTypeVariable(typeVar))
   }
 
-  public shallowClone() {
-    return new TupleType(this.elements, this.node);
+  public deepClone(): TupleType {
+    return new TupleType(this.elements.map(element => element.deepClone()), this.node);
   }
 
   public applySubstitution(substitution: TypeVarSubstitution): Type {
@@ -117,9 +120,7 @@ export class TupleType implements TypeBase {
 
 let nextPrimTypeId = 0;
 
-export class PrimType implements TypeBase {
-
-  public readonly [classTag] = typeClass;
+export class PrimType extends TypeBase {
 
   public readonly kind = TypeKind.PrimType;
 
@@ -128,12 +129,13 @@ export class PrimType implements TypeBase {
   constructor(
     public displayName: string,
     primId?: number,
-    public node: Syntax | null = null,
+    node: Syntax | null = null,
   ) {
+    super(node);
     this.primId = primId ?? nextPrimTypeId++;
   }
 
-  public shallowClone() {
+  public deepClone(): PrimType {
     return new PrimType(this.displayName, this.primId, this.node);
   }
 
@@ -145,28 +147,30 @@ export class PrimType implements TypeBase {
     return this;
   }
 
-  public [prettyPrintTag]() {
+  public [prettyPrintTag](): string {
     return this.displayName;
   }
 
 }
 
-export class ArrowType implements TypeBase {
-
-  public readonly [classTag] = typeClass;
+export class ArrowType extends TypeBase {
 
   public readonly kind = TypeKind.ArrowType;
 
   constructor(
     public paramTypes: Type[],
     public returnType: Type,
-    public node: Syntax | null = null
+    node: Syntax | null = null
   ) {
-
+    super(node);
   }
 
-  public shallowClone() {
-    return new ArrowType(this.paramTypes, this.returnType, this.node)
+  public deepClone(): ArrowType {
+    return new ArrowType(
+      this.paramTypes.map(paramType => paramType.deepClone()),
+      this.returnType.deepClone(),
+      this.node
+    )
   }
 
   public hasTypeVariable(typeVar: TypeVar): boolean {
@@ -188,49 +192,20 @@ export class ArrowType implements TypeBase {
 
 }
 
-export class RecordType implements TypeBase {
-
-  public readonly [classTag] = typeClass;
-
-  public readonly kind = TypeKind.RecordType;
-
-  private fieldMap = new Map<string, Type>();
-
-  constructor(
-    fields: Iterable<[string, Type]>,
-    public node: Syntax | null = null
-  ) {
-    this.fieldMap = new Map(fields);
-  }
-
-  public applySubstitution(substitution: TypeVarSubstitution): RecordType {
-    return new RecordType([...this.fieldMap]
-      .map(([name, type]) => [name, type.applySubstitution(substitution)] as [string, Type]));
-  }
-
-  public hasTypeVariable(typeVar: TypeVar): boolean {
-    for (const [_name, type] of this.fieldMap) {
-      if (type.hasTypeVariable(typeVar)) {
-        return true;
-      }
+function compareToDiff<T>(lessThan: (a: T, b: T) => boolean) {
+  return function (a: T, b: T) {
+    if (lessThan(a, b)) {
+      return -1;
+    } else if (lessThan(b, a)) {
+      return 1;
+    } else {
+      return 0;
     }
-    return false;
   }
-
-  public [prettyPrintTag]() {
-    return '{ ' + [...this.fieldMap].map(([name, type]) => `${name}: ${prettyPrint(type)}`).join(', ') + ' }';
-  }
-
-  public shallowClone() {
-    return new RecordType([...this.fieldMap]);
-  }
-
 }
 
 export function isType(value: any): value is Type {
-  return value !== null
-      && typeof(value) === 'object'
-      && value[classTag] === typeClass;
+  return Object(value) instanceof TypeBase;
 }
 
 export const intType = new PrimType('Int');
@@ -349,7 +324,7 @@ function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
   return substitution
 }
 
-export function unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
+function unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
   let substitution = new TypeVarSubstitution();
   for (let i = 0; i < leftTypes.length; i++) {
     const localSubstitution = unifies(leftTypes[i], rightTypes[i]);

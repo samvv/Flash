@@ -1,7 +1,7 @@
 
 import { SyntaxKind, kindToString, Syntax, isStatement } from "./ast"
 import { FastStringMap, assert } from "./util"
-import { boolType, intType, isTypeAssignableTo, PrimType, RecordType, stringType, Type, voidType } from "./types";
+import { boolType, intType, isTypeAssignableTo, PrimType, stringType, Type, voidType } from "./types";
 
 export enum ValueType {
   Int,
@@ -103,12 +103,8 @@ export class RecordValue {
     this.fields.clear();
   }
 
-  public getType() {
-    const fieldTypes: Array<[string, Type]> = [];
-    for (const [name, value] of this.fields) {
-      fieldTypes.push([name, value.getType()]);
-    }
-    return new RecordType(fieldTypes);
+  public getType(): Type {
+    throw new Error(`Method not implemented yet`);
   }
 
 }

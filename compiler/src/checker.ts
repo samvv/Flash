@@ -13,7 +13,7 @@ import {
   NodeFlags,
   SourceFile,
   Syntax,
-  SyntaxKind
+  SyntaxKind,
 } from "./ast";
 import { getSymbolText } from "./common";
 import {
@@ -35,7 +35,7 @@ import {
   intType,
   boolType,
   stringType,
-  unifies
+  unifies,
 } from "./types"
 
 function getFreeVariablesOfType(type: Type): TypeVarSet {
@@ -234,32 +234,7 @@ function getNodeIntroducingScope(node: Syntax) {
   }
 }
 
-// function listOriginatingTypes(types: Type[]) {
-//   const diagnostics = [];
-//   for (let i = 0; i < types.length; i++) {
-//     const type = types[i];
-//     if (type !== null) {
-//       let message = E_TYPE_ORIGINATED_FROM_HERE ;
-//       if (types.length >= 2) {
-//         if (i === 0) {
-//           message = E_FIRST_TYPE_ORIGINATED_FROM_HERE;
-//         } else if (i === 1) {
-//           message = E_SECOND_TYPE_ORIGINATED_FROM_HERE;
-//         }
-//       }
-//       diagnostics.push({
-//         node: type.node,
-//         message,
-//         severity: 'info'
-//       });
-//     }
-//   }
-//   return diagnostics;
-// }
-
 export class TypeChecker {
-
-  private nextPrimTypeId = 1;
 
   private nodeToType = new FastStringMap<number, Type>();
   private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
@@ -301,14 +276,14 @@ export class TypeChecker {
     // used. The auto-imported source files should be scanned anyways because
     // their bindings might be used without a corresponding import-statement.
     for (const importedSourceFile of this.program.getAllGloballyDeclaredSourceFiles()) {
-      this.forwardDeclare(importedSourceFile, newTypeEnv);
+      this.forwardDeclare(importedSourceFile, newTypeEnv, constraints);
       this.checkNode(importedSourceFile, newTypeEnv, constraints);
     }
 
     // If the source file wasn't auto-imported it can't possibly be processed
     // yet because the previous loop only took the auto-imported source files.
     if ((sourceFile.flags & NodeFlags.AutoImported) === 0) {
-      this.forwardDeclare(sourceFile, newTypeEnv);
+      this.forwardDeclare(sourceFile, newTypeEnv, constraints);
       this.checkNode(sourceFile, newTypeEnv, constraints);
     }
 
@@ -336,7 +311,7 @@ export class TypeChecker {
       case SyntaxKind.BindPattern:
         {
           const varName = node.name.text;
-          const localValueType = valueType.shallowClone();
+          const localValueType = valueType.deepClone();
           localValueType.node = node;
           typeEnv.set(varName, shouldGeneralize ? generalizeType(localValueType, typeEnv) : new ForallScheme([], localValueType));
           break;
@@ -355,7 +330,7 @@ export class TypeChecker {
         if (varType === null) {
           throw new BindingNotFoundError(node, varName);
         }
-        const localVarType = varType.shallowClone();
+        const localVarType = varType.deepClone();
         localVarType.node = node;
         constraints.push([
           localVarType,
@@ -368,17 +343,23 @@ export class TypeChecker {
     }
   }
 
-  private forwardDeclare(node: Syntax, typeEnv: TypeEnv) {
+  private forwardDeclare(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]) {
 
     switch (node.kind) {
 
       case SyntaxKind.SourceFile:
         {
           for (const element of node.elements) {
-            this.forwardDeclare(element, typeEnv);
+            this.forwardDeclare(element, typeEnv, constraints);
           }
           break;
         }
+
+      case SyntaxKind.MemberExpression:
+      {
+        this.forwardDeclare(node.expression, typeEnv, constraints);
+        break;
+      }
 
       case SyntaxKind.ReferenceExpression:
       case SyntaxKind.MatchExpression:
@@ -387,7 +368,11 @@ export class TypeChecker {
 
       case SyntaxKind.RecordDeclaration:
       {
-        typeEnv.set(node.name.text, new ForallScheme([], new PrimType(node.name.text, undefined, node)));
+        assert(node.members === null);
+        typeEnv.set(
+          node.name.text,
+          new ForallScheme([], new PrimType(node.name.text, undefined, node))
+        );
         break;
       }
 
@@ -403,9 +388,9 @@ export class TypeChecker {
 
       case SyntaxKind.CallExpression:
         {
-          this.forwardDeclare(node.operator, typeEnv);
+          this.forwardDeclare(node.operator, typeEnv, constraints);
           for (const operand of node.operands) {
-            this.forwardDeclare(operand, typeEnv);
+            this.forwardDeclare(operand, typeEnv, constraints);
           }
           break;
         }
@@ -418,7 +403,7 @@ export class TypeChecker {
 
       case SyntaxKind.ExpressionStatement:
         {
-          this.forwardDeclare(node.expression, typeEnv);
+          this.forwardDeclare(node.expression, typeEnv, constraints);
           break;
         }
 
@@ -427,7 +412,7 @@ export class TypeChecker {
 
       case SyntaxKind.AssignStatement:
         {
-          this.forwardDeclare(node.rhs, typeEnv);
+          this.forwardDeclare(node.rhs, typeEnv, constraints);
           break;
         }
 
@@ -471,6 +456,17 @@ export class TypeChecker {
   ): Type {
 
     switch (node.kind) {
+
+      case SyntaxKind.RecordExpression:
+      {
+        assert(node.typeRef.name.modulePath.length === 0);
+        const recordName = getSymbolText(node.typeRef.name.name);
+        const recordType = typeEnv.lookup(recordName)
+        if (recordType === null) {
+          throw new BindingNotFoundError(node.typeRef.name, recordName);
+        }
+        return recordType;
+      }
 
       case SyntaxKind.ReturnStatement:
       {
@@ -530,7 +526,7 @@ export class TypeChecker {
           if (type === null) {
             throw new TypeNotFoundError(node, typeName);
           }
-          const localType = type.shallowClone();
+          const localType = type.deepClone();
           localType.node = node;
           return localType!;
         }
@@ -647,7 +643,7 @@ export class TypeChecker {
           if (declaredType === null) {
             throw new TypeNotFoundError(node, typePath);
           }
-          const localType = declaredType.shallowClone()
+          const localType = declaredType.deepClone()
           localType.node = node;
           return localType;
         }
@@ -669,7 +665,7 @@ export class TypeChecker {
           if (type === null) {
             throw new BindingNotFoundError(node, varName);
           }
-          const localType = type.shallowClone();
+          const localType = type.deepClone();
           localType.node = node;
           return localType;
         }

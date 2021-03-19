@@ -1,13 +1,13 @@
 
 import test from "ava";
-import { BindPattern, ExpressionStatement, setParents } from "../ast";
 
+import { BindPattern, ExpressionStatement, setParents } from "../ast";
 import { BindingNotFoundError, UnificationError, UninitializedBindingError } from "../errors";
 import { createTokenStream } from "../common";
 import { Parser } from "../parser";
 import { Program } from "../program";
 import { Package } from "../package";
-import {Type, TypeKind} from "../types";
+import {boolType, intType, stringType, Type, TypeKind} from "../types";
 
 function getTypeOfExpr(input: string) {
   const sourceFile = loadSourceFile(input + ';');
@@ -16,17 +16,17 @@ function getTypeOfExpr(input: string) {
 
 function isIntType(type: Type) {
   return type.kind === TypeKind.PrimType
-      && type.displayName === 'Int'
+      && type.primId === intType.primId;
 }
 
 function isStringType(type: Type) {
   return type.kind === TypeKind.PrimType
-      && type.displayName === 'String'
+      && type.primId === stringType.primId
 }
 
 function isBoolType(type: Type) {
   return type.kind === TypeKind.PrimType
-      && type.displayName === 'Bool'
+      && type.primId === boolType.primId
 }
 
 function loadSourceFile(input: string) {
@@ -273,3 +273,34 @@ is_odd(2);
   const exprType2 = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
   t.assert(isBoolType(exprType2));
 });
+
+//test('access to a record field is correctly typed', t => {
+//  const sourceFile = loadSourceFile(`
+//struct Foo {
+//  a: String,
+//  b: Int,
+//}
+//let foo = Foo { a: "Hello, world!", b: 1 }
+//foo.a;
+//foo.b;
+//`)
+//  const aType = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+//  t.assert(isIntType(aType));
+//  const bType = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+//  t.assert(isIntType(bType));
+//});
+
+//test('an instance of a record can be overloaded with any matching function', t => {
+//  const sourceFile = loadSourceFile(`
+//struct Wrapper {
+//  value: Int,
+//}
+//fn get(wrapper: Wrapper) {
+//  return wrapper.value;
+//}
+//let foo = Wrapper { value: 1 }
+//foo.get();
+//`)
+//  t.assert(isIntType((sourceFile.elements[3] as ExpressionStatement).expression.getType()));
+//});
+

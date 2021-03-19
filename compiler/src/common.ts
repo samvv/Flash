@@ -17,7 +17,7 @@ import { BOLT_SUPPORTED_LANGUAGES } from "./constants"
 import { assert, registerClass, GeneratorStream, FastMultiMap } from "./util";
 import { TextSpan, TextPos, TextFile } from "./text";
 import { Scanner } from "./scanner";
-import { ParseError, TYPE_ERROR_MESSAGES } from "./errors";
+import { ParseError } from "./errors";
 import { NODE_TYPES } from "./ast"
 import { Package } from "./package";
 
