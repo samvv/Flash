@@ -1,5 +1,5 @@
+
 import { Syntax } from "./ast";
-import { CompileError, ParamCountMismatchError, UnboundFreeVariableError, UnificationError } from "./errors";
 import { FastStringMap, prettyPrintTag } from "./util";
 
 export enum TypeKind {
@@ -31,6 +31,10 @@ export abstract class TypeBase {
 
   public abstract [prettyPrintTag](): string;
 
+  public get solved(): Type {
+    return this as unknown as Type;
+  }
+
 }
 
 function createGenerator(defaultPrefix: string) {
@@ -52,11 +56,32 @@ export class TypeVar extends TypeBase {
 
   public readonly kind = TypeKind.TypeVar;
 
+  private solvedType?: Type;
+
   constructor(
     node: Syntax | null = null,
     public varId = generateTypeVarId()
   ) {
     super(node);
+  }
+
+  public get solved(): Type {
+    if (this.solvedType === undefined) {
+      return this;
+    }
+    let currType: Type = this;
+    do {
+      currType = currType.solvedType!;
+    } while (currType.kind === TypeKind.TypeVar && currType.solvedType !== undefined);
+    return this.solvedType = currType;
+  }
+
+  public set solved(newType: Type) {
+    this.solvedType = newType;
+  }
+
+  public resolve(): Type {
+    return this.solved;
   }
 
   public hasTypeVariable(typeVar: TypeVar): boolean {
@@ -69,10 +94,7 @@ export class TypeVar extends TypeBase {
 
   public applySubstitution(substitution: TypeVarSubstitution): Type {
     if (substitution.has(this)) {
-      // FIXME How can we guarantee that a shallow clone is enough when the
-      //       original algorithm performs a deep clone?
-      const type = substitution.get(this).deepClone();
-      return type;
+      return substitution.get(this);
     } else {
       return this;
     }
@@ -110,6 +132,12 @@ export class TupleType extends TypeBase {
     )
   }
 
+  public resolve(): Type {
+    return new TupleType(
+      this.elements.map(type => type.resolve())
+    );
+  }
+
   public [prettyPrintTag](): string {
     return '(' + this.elements
       .map(type => type[prettyPrintTag]())
@@ -141,6 +169,10 @@ export class PrimType extends TypeBase {
 
   public hasTypeVariable(_typeVar: TypeVar): boolean {
     return false;
+  }
+
+  public resolve(): Type {
+    return this;
   }
 
   public applySubstitution(_substitution: TypeVarSubstitution) {
@@ -186,8 +218,18 @@ export class ArrowType extends TypeBase {
     )
   }
 
+  public resolve(): Type {
+    return new ArrowType(
+      this.paramTypes.map(type => type.resolve()),
+      this.returnType.resolve()
+    );
+  }
+
   public [prettyPrintTag](): string {
-    return `(${this.paramTypes.map(type => type[prettyPrintTag]()).join(', ')}) -> ${this.returnType[prettyPrintTag]()}`
+    return `(${this.paramTypes
+        .map(paramTypeRef => paramTypeRef)
+        .map(paramType => paramType[prettyPrintTag]())
+        .join(', ')}) -> ${this.returnType[prettyPrintTag]()}`
   }
 
 }
@@ -232,25 +274,25 @@ export class TypeVarSubstitution {
     this.mapping.delete(source.varId);
   }
 
-  public composeWith(other: TypeVarSubstitution): TypeVarSubstitution {
-    const newSubstitution = new TypeVarSubstitution();
-    for (const [typeVar, type] of other) {
-      newSubstitution.add(typeVar, type.applySubstitution(this));
-    }
-    for (const [typeVar, type] of this) {
-      newSubstitution.add(typeVar, type);
-    }
-    return newSubstitution;
-  }
+  //public composeWith(other: TypeVarSubstitution): TypeVarSubstitution {
+  //  const newSubstitution = new TypeVarSubstitution();
+  //  for (const [typeVar, type] of other) {
+  //    newSubstitution.add(typeVar, type.applySubstitution(this));
+  //  }
+  //  for (const [typeVar, type] of this) {
+  //    newSubstitution.add(typeVar, type);
+  //  }
+  //  return newSubstitution;
+  //}
 
-  public applyComposition(other: TypeVarSubstitution): void {
-    for (const [typeVar, type] of other) {
-      // if (this.has(typeVar)) {
-      //   this.delete(typeVar);
-      // }
-      this.add(typeVar, type.applySubstitution(this));
-    }
-  }
+  //public applyComposition(other: TypeVarSubstitution): void {
+  //  for (const [typeVar, type] of other) {
+  //    // if (this.has(typeVar)) {
+  //    //   this.delete(typeVar);
+  //    // }
+  //    this.add(typeVar, type.applySubstitution(this));
+  //  }
+  //}
 
   public defaults(other: TypeVarSubstitution): void{ 
     for (const [name, entry] of other.mapping) {
@@ -302,86 +344,13 @@ export class TypeVarSet {
 
 }
 
-const emptyTypeVarSubstitution = new TypeVarSubstitution();
+export function areTypesEqual(a: Type, b: Type): boolean {
 
-function bindTypeVar(typeVar: TypeVar, type: Type): TypeVarSubstitution {
-
-  // Binding a type variable to itself means that we don't have to substitute
-  // anything.
-  if (type.kind === TypeKind.TypeVar && type.varId === typeVar.varId) {
-    return emptyTypeVarSubstitution;
-  }
-
-  // This 'occurs check' ensures that a type variable is actually used. If it
-  // isn't used, bindTypeVar would do nothing and we are at risk of having an
-  // infinite loop in the unifier.
-  if (type.hasTypeVariable(typeVar)) {
-    throw new UnboundFreeVariableError(type, typeVar);
-  }
-
-  const substitution = new TypeVarSubstitution();
-  substitution.add(typeVar, type);
-  return substitution
-}
-
-function unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
-  let substitution = new TypeVarSubstitution();
-  for (let i = 0; i < leftTypes.length; i++) {
-    const localSubstitution = unifies(leftTypes[i], rightTypes[i]);
-    for (let k = i; k < leftTypes.length; k++) {
-      leftTypes[k] = leftTypes[k].applySubstitution(localSubstitution);
-      rightTypes[k] = rightTypes[k].applySubstitution(localSubstitution);
-    }
-    substitution = localSubstitution.composeWith(substitution);
-  }
-  return substitution;
-}
-
-export function unifies(a: Type, b: Type): TypeVarSubstitution {
-
-  // Two types that have the same structure can be unified as-is without
-  // requiring any substitution to take place.
-  if (areTypesEqual(a, b)) {
-    return new TypeVarSubstitution();
-  }
-
-  // The following cases are quite straightforward. We perform some checks
-  // and return an empty substitution if both a and b point to the same type
-  // variable. Otherwise, we create a simple substitution for the type
-  // variable.
-
-  if (a.kind === TypeKind.TypeVar) {
-    return bindTypeVar(a, b);
-  }
-  if (b.kind === TypeKind.TypeVar) {
-    return bindTypeVar(b, a);
-  }
-
-  if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
-
-    // Right now, two arrow types must have the exact same amount of
-    // parameters or else an error occurs. In the future, this might changed
-    // in order to support default arguments.
-    if (a.paramTypes.length !== b.paramTypes.length) {
-      throw new ParamCountMismatchError(a, b);
-    }
-
-    // Becuase the return type depends on the parameter types, and because a
-    // parameter type may eventually depend on a previous parameter (due to
-    // default expressions), we use a unifier that simply runs from left to
-    // right.
-    return unifyMany(
-      [...a.paramTypes, a.returnType],
-      [...b.paramTypes, b.returnType]
-    );
-  }
-
-  // If we got here then none of our unification rules matched, so the
-  // combination of types must be invalid.
-  throw new UnificationError(a, b);
-}
-
-function areTypesEqual(a: Type, b: Type): boolean {
+  // We need to take in account any type variables that already have been
+  // substituted. The 'solved' property contains the type with as much
+  // top-level type variables replaced as possible.
+  a = a.solved;
+  b = b.solved;
 
   // This is an early check that is not strictly necessary but might speed up
   // things a bit.
@@ -420,14 +389,9 @@ function areTypesEqual(a: Type, b: Type): boolean {
 }
 
 export function isTypeAssignableTo(a: Type, b: Type): boolean {
-  try {
-    unifies(a, b);
-  } catch (error) {
-    if (!(error instanceof CompileError)) {
-      throw error;
-    }
-    return false;
-  }
-  return true;
+  // Provided we have already unified the both `a` and `b` in the past,
+  // checking for assignability is just the same as checking the types we get
+  // after resolving any type variables are syntactically equivalent.
+  return areTypesEqual(a, b);
 }
 

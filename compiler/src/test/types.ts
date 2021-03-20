@@ -129,8 +129,8 @@ a = "foo";
 `);
   }) as UnificationError;
   t.assert(error instanceof UnificationError);
-  t.assert(isStringType(error.left));
-  t.assert(isIntType(error.right));
+  t.assert(isStringType(error.right));
+  t.assert(isIntType(error.left));
 });
 
 test('a variable may be reassigned different times with a value of the same type', t => {
@@ -164,8 +164,8 @@ a = "foo";
 `)
   }) as UnificationError;
   t.assert(error instanceof UnificationError);
-  t.assert(isStringType(error.left));
-  t.assert(isIntType(error.right));
+  t.assert(isStringType(error.right));
+  t.assert(isIntType(error.left));
 });
 
 test('a recursive function calculating the factorial can be defined', t => {

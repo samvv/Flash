@@ -13,7 +13,7 @@ export const E_TYPE_ORIGINATED_FROM_HERE = "Type originated from here."
 export const E_FIRST_TYPE_ORIGINATED_FROM_HERE = "First type originated from here."
 export const E_SECOND_TYPE_ORIGINATED_FROM_HERE = "Second type originated from here."
 export const E_UNINITIALIZED_BINDING = "This variable is read-only and has not been initialized."
-export const E_UNBOUND_FREE_VARIABLE = "Type {type} has {typeVar} as an unbound free type variable."
+export const E_OCCURS_CHECK_FAILURE = "Type {type} already has {typeVar} somewhere in its body."
 export const E_PARAM_COUNT_MISMATCH = "Type {left} accepts {leftCount} arguments while {right} accepts {rightCount}"
 export const E_ASSIGN_TUPLE_LENGTH_MISMATCH = "Trying to assign a tuple of length {rhsLength} to a tuple of length {lhsLength}"
 export const E_MAY_NOT_RETURN_BECAUSE_TYPE_RESOLVES_TO_VOID = "May not return a value because the function's return type resolves to '()'"
@@ -238,12 +238,12 @@ export class ParamCountMismatchError extends CompileError {
 
 }
 
-export class UnboundFreeVariableError extends CompileError {
+export class OccursCheckError extends CompileError {
 
   public readonly severity = 'error'
 
   constructor(public type: Type, public typeVar: TypeVar) {
-    super(E_UNBOUND_FREE_VARIABLE);
+    super(E_OCCURS_CHECK_FAILURE);
   }
 
 }

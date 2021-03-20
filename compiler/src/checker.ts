@@ -20,6 +20,9 @@ import {
   TypeNotFoundError,
   UninitializedBindingError,
   BindingNotFoundError,
+  OccursCheckError,
+  ParamCountMismatchError,
+  UnificationError,
 } from "./errors";
 import { Program } from "./program";
 import { assert, FastStringMap } from "./util";
@@ -35,7 +38,7 @@ import {
   intType,
   boolType,
   stringType,
-  unifies,
+  areTypesEqual,
 } from "./types"
 
 function getFreeVariablesOfType(type: Type): TypeVarSet {
@@ -218,6 +221,7 @@ function generalizeType(type: Type, typeEnv: TypeEnv): Scheme {
   }
   return new ForallScheme(freeVariables, type);
 }
+
 function getNodeIntroducingScope(node: Syntax) {
   let currNode: Syntax | null = node;
   while (true) {
@@ -235,6 +239,10 @@ function getNodeIntroducingScope(node: Syntax) {
 }
 
 export class TypeChecker {
+
+  private constraints: Constraint[] = [];
+
+  private substitution = new TypeVarSubstitution();
 
   private nodeToType = new FastStringMap<number, Type>();
   private nodeToTypeEnv = new FastStringMap<number, TypeEnv>();
@@ -256,39 +264,36 @@ export class TypeChecker {
     this.builtinTypeEnv.set('!=', new ForallScheme([], new ArrowType([ intType, intType ], boolType)))
   }
 
+  private addConstraint(constraint: Constraint) {
+    this.constraints.push(constraint);
+  }
+
   public registerSourceFile(sourceFile: SourceFile): void {
 
     // This type environment will contain all top-level bindings that are
     // declared inside the source file.
     const newTypeEnv = new TypeEnv(this.builtinTypeEnv);
 
-    //for (const type of this.builtinTypes) {
-    //  newTypeEnv.set(type.displayName, new ForallScheme(new TypeVarSet, type));
-    //}
-
     this.nodeToTypeEnv.add(sourceFile.id, newTypeEnv)
-
-    // All contraints that are generated inside this source file and all
-    // imported source files are stored in this array.
-    const constraints: Constraint[] = [];
 
     // We want to be lazy and only import those source files that are actually
     // used. The auto-imported source files should be scanned anyways because
     // their bindings might be used without a corresponding import-statement.
     for (const importedSourceFile of this.program.getAllGloballyDeclaredSourceFiles()) {
-      this.forwardDeclare(importedSourceFile, newTypeEnv, constraints);
-      this.checkNode(importedSourceFile, newTypeEnv, constraints);
+      this.forwardDeclare(importedSourceFile, newTypeEnv);
+      this.checkNode(importedSourceFile, newTypeEnv);
     }
 
     // If the source file wasn't auto-imported it can't possibly be processed
     // yet because the previous loop only took the auto-imported source files.
     if ((sourceFile.flags & NodeFlags.AutoImported) === 0) {
-      this.forwardDeclare(sourceFile, newTypeEnv, constraints);
-      this.checkNode(sourceFile, newTypeEnv, constraints);
+      this.forwardDeclare(sourceFile, newTypeEnv);
+      this.checkNode(sourceFile, newTypeEnv);
     }
 
-    // Save the substitution for future reference.
-    this.sourceFileToSubstitution.add(sourceFile.id, this.solveConstraints(constraints));
+    // Solve all the constraints. The result will be available inside the local
+    // substitution object.
+    this.solveConstraints();
 
   }
 
@@ -296,24 +301,28 @@ export class TypeChecker {
     node: Pattern,
     valueType: Type,
     typeEnv: TypeEnv,
-    constraints: Constraint[],
     shouldGeneralize: boolean
   ) {
     switch (node.kind) {
       case SyntaxKind.ExpressionPattern:
         {
-          constraints.push([
+          this.addConstraint([
             valueType,
-            this.inferNode(node.expression, typeEnv, constraints)
+            this.inferNode(node.expression, typeEnv)
           ])
           break;
         }
       case SyntaxKind.BindPattern:
         {
           const varName = node.name.text;
-          const localValueType = valueType.deepClone();
+          const localValueType = valueType;
           localValueType.node = node;
-          typeEnv.set(varName, shouldGeneralize ? generalizeType(localValueType, typeEnv) : new ForallScheme([], localValueType));
+          typeEnv.set(
+            varName,
+            shouldGeneralize
+              ? generalizeType(localValueType, typeEnv)
+              : new ForallScheme([], localValueType)
+          );
           break;
         }
       default:
@@ -321,7 +330,11 @@ export class TypeChecker {
     }
   }
 
-  private inferAssignment(node: Pattern, valueType: Type, typeEnv: TypeEnv, constraints: Constraint[]) {
+  private inferAssignment(
+    node: Pattern,
+    valueType: Type,
+    typeEnv: TypeEnv
+  ) {
     switch (node.kind) {
       case SyntaxKind.BindPattern:
       {
@@ -330,9 +343,9 @@ export class TypeChecker {
         if (varType === null) {
           throw new BindingNotFoundError(node, varName);
         }
-        const localVarType = varType.deepClone();
+        const localVarType = varType;
         localVarType.node = node;
-        constraints.push([
+        this.addConstraint([
           localVarType,
           valueType,
         ])
@@ -343,21 +356,21 @@ export class TypeChecker {
     }
   }
 
-  private forwardDeclare(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]) {
+  private forwardDeclare(node: Syntax, typeEnv: TypeEnv) {
 
     switch (node.kind) {
 
       case SyntaxKind.SourceFile:
         {
           for (const element of node.elements) {
-            this.forwardDeclare(element, typeEnv, constraints);
+            this.forwardDeclare(element, typeEnv);
           }
           break;
         }
 
       case SyntaxKind.MemberExpression:
       {
-        this.forwardDeclare(node.expression, typeEnv, constraints);
+        this.forwardDeclare(node.expression, typeEnv);
         break;
       }
 
@@ -388,9 +401,9 @@ export class TypeChecker {
 
       case SyntaxKind.CallExpression:
         {
-          this.forwardDeclare(node.operator, typeEnv, constraints);
+          this.forwardDeclare(node.operator, typeEnv);
           for (const operand of node.operands) {
-            this.forwardDeclare(operand, typeEnv, constraints);
+            this.forwardDeclare(operand, typeEnv);
           }
           break;
         }
@@ -403,7 +416,7 @@ export class TypeChecker {
 
       case SyntaxKind.ExpressionStatement:
         {
-          this.forwardDeclare(node.expression, typeEnv, constraints);
+          this.forwardDeclare(node.expression, typeEnv);
           break;
         }
 
@@ -412,7 +425,7 @@ export class TypeChecker {
 
       case SyntaxKind.AssignStatement:
         {
-          this.forwardDeclare(node.rhs, typeEnv, constraints);
+          this.forwardDeclare(node.rhs, typeEnv);
           break;
         }
 
@@ -451,7 +464,6 @@ export class TypeChecker {
   private inferNode(
     node: Syntax,
     typeEnv: TypeEnv,
-    constraints: Constraint[],
     returnType: Type | null = null
   ): Type {
 
@@ -473,8 +485,8 @@ export class TypeChecker {
         assert(returnType !== null);
         const valueType = node.value === null
             ? new TupleType([], node)
-            : this.inferNode(node.value, typeEnv, constraints)
-        constraints.push([
+            : this.inferNode(node.value, typeEnv)
+        this.addConstraint([
           returnType!,
           valueType,
         ]);
@@ -485,14 +497,14 @@ export class TypeChecker {
         {
           for (const caseNode of node.cases) {
             if (caseNode.test !== null) {
-              constraints.push([
-                this.inferNode(caseNode.test, typeEnv, constraints, returnType),
+              this.addConstraint([
+                this.inferNode(caseNode.test, typeEnv, returnType),
                 // FIXME Should be looked up instead of created.
                 boolType
               ]);
             }
             for (const element of caseNode.body) {
-              this.inferNode(element, typeEnv, constraints, returnType);
+              this.inferNode(element, typeEnv, returnType);
             }
           }
           return new TupleType([], node);
@@ -501,15 +513,16 @@ export class TypeChecker {
       case SyntaxKind.MatchExpression:
         {
 
-          const valueType = this.inferNode(node.value, typeEnv, constraints);
+          // FIXME Should we pass through the return type in this recursive call?
+          const valueType = this.inferNode(node.value, typeEnv, null);
           const resultType = new TypeVar(node);
 
           for (const matchArm of node.arms) {
             const innerTypeEnv = new TypeEnv(typeEnv);
             // FIXME Should let-bindings generated in a match arm be generalised?
-            this.inferBinding(matchArm.pattern, valueType, innerTypeEnv, constraints, false);
-            const type = this.inferNode(matchArm.body, innerTypeEnv, constraints);
-            constraints.push([
+            this.inferBinding(matchArm.pattern, valueType, innerTypeEnv, false);
+            const type = this.inferNode(matchArm.body, innerTypeEnv);
+            this.addConstraint([
               resultType,
               type,
             ])
@@ -526,7 +539,7 @@ export class TypeChecker {
           if (type === null) {
             throw new TypeNotFoundError(node, typeName);
           }
-          const localType = type.deepClone();
+          const localType = type;
           localType.node = node;
           return localType!;
         }
@@ -546,30 +559,30 @@ export class TypeChecker {
           for (const param of node.params) {
             let paramType
             if (param.typeExpr !== null) {
-              paramType = this.inferNode(param.typeExpr, typeEnv, constraints);
+              paramType = this.inferNode(param.typeExpr, typeEnv);
             } else {
               paramType = new TypeVar(param); 
             }
-            this.inferBinding(param.bindings, paramType, innerTypeEnv, constraints, false);
+            this.inferBinding(param.bindings, paramType, innerTypeEnv, false);
             paramTypes.push(paramType);
           }
 
           const returnType = new TypeVar(node);
-          constraints.push([
+          this.addConstraint([
             fnType,
             new ArrowType(paramTypes, returnType, node)
           ]);
 
           if (node.returnTypeExpr !== null) {
-            constraints.push([
+            this.addConstraint([
               returnType,
-              this.inferNode(node.returnTypeExpr, typeEnv, constraints)
+              this.inferNode(node.returnTypeExpr, typeEnv)
             ]);
           }
 
           if (node.body !== null) {
             for (const element of node.body) {
-              this.inferNode(element, innerTypeEnv, constraints, returnType);
+              this.inferNode(element, innerTypeEnv, returnType);
             }
           }
 
@@ -591,15 +604,15 @@ export class TypeChecker {
             // list and bind whatever type that comes out of it with our type
             // variable.
             if (node.typeExpr !== null) {
-              const typeExprType = this.inferNode(node.typeExpr, typeEnv, constraints);
-              constraints.push([ typeVar, typeExprType ]);
+              const typeExprType = this.inferNode(node.typeExpr, typeEnv);
+              this.addConstraint([ typeVar, typeExprType ]);
             }
 
             // Similar to the type assertion above, but using the value
             // expression if there was any.
             if (node.value !== null) {
-              const valueType = this.inferNode(node.value, typeEnv, constraints);
-              constraints.push([ typeVar, valueType ])
+              const valueType = this.inferNode(node.value, typeEnv);
+              this.addConstraint([ typeVar, valueType ])
             }
 
             // We don't generalize a mutable variable declaration. It causes
@@ -607,7 +620,7 @@ export class TypeChecker {
             // to the variable. The assignment would be accepted, while it really
             // shouldn't.
             // See also https://cstheory.stackexchange.com/a/42557
-            this.inferBinding(node.bindings, typeVar, typeEnv, constraints, false);
+            this.inferBinding(node.bindings, typeVar, typeEnv, false);
 
             resultType = typeVar;
 
@@ -619,9 +632,9 @@ export class TypeChecker {
               throw new UninitializedBindingError(node);
             }
 
-            resultType = this.inferNode(node.value!, typeEnv, constraints);
+            resultType = this.inferNode(node.value!, typeEnv);
 
-            this.inferBinding(node.bindings, resultType, typeEnv, constraints, true);
+            this.inferBinding(node.bindings, resultType, typeEnv, true);
           }
 
           return resultType;
@@ -643,7 +656,7 @@ export class TypeChecker {
           if (declaredType === null) {
             throw new TypeNotFoundError(node, typePath);
           }
-          const localType = declaredType.deepClone()
+          const localType = declaredType
           localType.node = node;
           return localType;
         }
@@ -665,7 +678,7 @@ export class TypeChecker {
           if (type === null) {
             throw new BindingNotFoundError(node, varName);
           }
-          const localType = type.deepClone();
+          const localType = type;
           localType.node = node;
           return localType;
         }
@@ -677,20 +690,20 @@ export class TypeChecker {
 
           // First we build a type of the function that has been called. This
           // type should eventually resolve to an ArrowType.
-          const operatorType = this.inferNode(node.operator, typeEnv, constraints)
+          const operatorType = this.inferNode(node.operator, typeEnv)
 
           // Build a list of types that correspond to the parameters of the
           // function being called.
           const operandTypes = [];
           for (const operand of node.operands) {
-            const operandType = this.inferNode(operand, typeEnv, constraints);
+            const operandType = this.inferNode(operand, typeEnv);
             operandTypes.push(operandType)
           }
 
           // Now make sure that the signature built out of these parameter types
           // actually match the function being called. They will be solved later
           // by the unifier.
-          constraints.push([
+          this.addConstraint([
             operatorType,
             new ArrowType(operandTypes, returnType, node)
           ]);
@@ -709,13 +722,13 @@ export class TypeChecker {
           for (const param of node.params) {
             const typeVar = new TypeVar(param);
             paramTypes.push(typeVar);
-            this.inferBinding(param.bindings, typeVar, newEnv, constraints, false);
+            this.inferBinding(param.bindings, typeVar, newEnv, false);
           }
 
           // Whatever the function returns is eventually determined by its body.
           let returnType: Type;
           if (node.expression !== null) {
-           returnType = this.inferNode(node.expression!, newEnv, constraints); 
+           returnType = this.inferNode(node.expression!, newEnv); 
           } else {
             throw new Error(`Not supported yet.`)
           }
@@ -732,9 +745,8 @@ export class TypeChecker {
         {
           this.inferAssignment(
             node.lhs,
-            this.inferNode(node.rhs, typeEnv, constraints),
+            this.inferNode(node.rhs, typeEnv),
             typeEnv,
-            constraints
           );
           return new TupleType([], node);
         }
@@ -746,12 +758,12 @@ export class TypeChecker {
 
   }
 
-  public checkNode(node: Syntax, typeEnv: TypeEnv, constraints: Constraint[]): void {
+  public checkNode(node: Syntax, typeEnv: TypeEnv): void {
     if (isExpression(node)
         || isFunctionDeclaration(node)
         || isAssignStatement(node)
         || isVariableDeclaration(node)) {
-      const type = this.inferNode(node, typeEnv, constraints);
+      const type = this.inferNode(node, typeEnv);
       if (!this.nodeToType.has(node.id)) {
         this.nodeToType.add(node.id, type);
       }
@@ -760,11 +772,11 @@ export class TypeChecker {
     switch (node.kind) {
       case SyntaxKind.SourceFile:
         for (const element of node.elements) {
-          this.checkNode(element, typeEnv, constraints);
+          this.checkNode(element, typeEnv);
         }
         break;
       case SyntaxKind.ExpressionStatement:
-        this.checkNode(node.expression, typeEnv, constraints);
+        this.checkNode(node.expression, typeEnv);
         break;
       case SyntaxKind.EnumDeclaration:
       case SyntaxKind.RecordDeclaration:
@@ -783,23 +795,105 @@ export class TypeChecker {
    * @param constraints A collection of constraints that will be consumed.
    * 
    */
-  private solveConstraints(constraints: Constraint[]): TypeVarSubstitution {
-    let substitution = new TypeVarSubstitution();
-    while (true) {
-      if (constraints.length === 0) {
-        return substitution;
-      }
-      const [a, b] = constraints.pop()!;
-      const newSubstitution = unifies(a, b);
-      for (let i = 0; i < constraints.length; i++) {
-        const constraint = constraints[i];
-        constraint[0] = constraint[0].applySubstitution(newSubstitution)
-        constraint[1] = constraint[1].applySubstitution(newSubstitution)
-      }
-      substitution = newSubstitution.composeWith(substitution);
+  private solveConstraints() {
+    for (const [a, b] of this.constraints) {
+      this.unify(a, b);
     }
   }
 
+  private unify(a: Type, b: Type): void {
+
+    // We need to take in account any type variables that already have been
+    // substituted. The 'solved' property contains the type with as much
+    // top-level type variables replaced as possible. An alternative approach
+    // would be to create a dictionary with type variables as keys but this
+    // approach should be slightly faster.
+    a = a.solved;
+    b = b.solved;
+
+    // Two types that have the same structure can be unified as-is without
+    // requiring any substitution to take place.
+    if (areTypesEqual(a, b)) {
+      return;
+    }
+
+    // The following cases are quite straightforward. Internally, we perform
+    // some checks and return an empty substitution if both a and b point to
+    // the same type variable. Otherwise, we create a simple substitution for
+    // the type variable.
+
+    if (a.kind === TypeKind.TypeVar) {
+
+      // This 'occurs check' verifies that a type variable does not occur in
+      // the type that will be substituted. If omitted, we would be able to
+      // create cyclic types that cannot be valid.
+      if (b.hasTypeVariable(a)) {
+        throw new OccursCheckError(b, a);
+      }
+
+      // We set the substitution of the type variable on the reference of the
+      // type variable itself. By doing this, we are actually joining disjoint
+      // sets.
+      a.solved = b;
+
+      // No more work to do.
+      return;
+    }
+
+    if (b.kind === TypeKind.TypeVar) {
+
+      // This 'occurs check' verifies that a type variable does not occur in
+      // the type that will be substituted. If omitted, we would be able to
+      // create cyclic types that cannot be valid.
+      if (a.hasTypeVariable(b)) {
+        throw new OccursCheckError(a, b);
+      }
+
+      // We set the substitution of the type variable on the reference of the
+      // type variable itself.
+      b.solved = a;
+
+      // No more work to do
+      return;
+    }
+
+    if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
+
+      // Right now, two arrow types must have the exact same amount of
+      // parameters or else an error occurs. In the future, this might changed
+      // in order to support default arguments.
+      if (a.paramTypes.length !== b.paramTypes.length) {
+        throw new ParamCountMismatchError(a, b);
+      }
+
+      for (let i = 0; i < a.paramTypes.length; i++) {
+        this.unify(a.paramTypes[i], b.paramTypes[i]);
+      }
+
+      this.unify(a.returnType, b.returnType);
+
+      // No more work to do.
+      return;
+
+    }
+
+    // If we got here then none of our unification rules matched, so the
+    // combination of types must be invalid.
+    throw new UnificationError(a, b);
+  }
+
+  //private unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
+  //  let substitution = new TypeVarSubstitution();
+  //  for (let i = 0; i < leftTypes.length; i++) {
+  //    const localSubstitution = unifies(leftTypes[i], rightTypes[i]);
+  //    for (let k = i; k < leftTypes.length; k++) {
+  //      leftTypes[k] = leftTypes[k].applySubstitution(localSubstitution);
+  //      rightTypes[k] = rightTypes[k].applySubstitution(localSubstitution);
+  //    }
+  //    substitution = localSubstitution.composeWith(substitution);
+  //  }
+  //  return substitution;
+  //}
 
   private getTypeEnvForNode(node: Syntax, parentTypeEnv: TypeEnv, shouldClone: boolean): TypeEnv {
     const scopeNode = getNodeIntroducingScope(node)
@@ -814,9 +908,7 @@ export class TypeChecker {
   }
 
   public getTypeOfNode(node: Syntax): Type {;
-    const type = this.nodeToType.get(node.id);
-    const substitution = this.sourceFileToSubstitution.get(node.getSourceFile().id);
-    return type.applySubstitution(substitution);
+    return this.nodeToType.get(node.id).resolve();
   }
 
 }
