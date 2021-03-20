@@ -274,21 +274,49 @@ is_odd(2);
   t.assert(isBoolType(exprType2));
 });
 
-//test('access to a record field is correctly typed', t => {
-//  const sourceFile = loadSourceFile(`
-//struct Foo {
-//  a: String,
-//  b: Int,
-//}
-//let foo = Foo { a: "Hello, world!", b: 1 }
-//foo.a;
-//foo.b;
-//`)
-//  const aType = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
-//  t.assert(isIntType(aType));
-//  const bType = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
-//  t.assert(isIntType(bType));
-//});
+test('access to a record field is correctly typed', t => {
+  const sourceFile = loadSourceFile(`
+struct Foo {
+  a: String,
+  b: Int,
+}
+let foo = Foo { a: "Hello, world!", b: 1 }
+foo.a;
+foo.b;
+`)
+  const aType = (sourceFile.elements[2] as ExpressionStatement).expression.getType();
+  t.assert(isStringType(aType));
+  const bType = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(bType));
+});
+
+test('constructing a record with a wrongly typed field fails', t => {
+  const error1 = t.throws(() => loadSourceFile(`
+struct Foo {
+  a: String,
+  b: Int,
+}
+let foo = Foo { a: 42, b: 1 }
+foo.a;
+foo.b;
+`)) as UnificationError;
+  t.assert(error1 instanceof UnificationError);
+  t.assert(isStringType(error1.left));
+  t.assert(isIntType(error1.right));
+
+  const error2 = t.throws(() => loadSourceFile(`
+struct Foo {
+  a: String,
+  b: Int,
+}
+let foo = Foo { a: "Some text", b: "Hello, world!" }
+foo.a;
+foo.b;
+`)) as UnificationError;
+  t.assert(error2 instanceof UnificationError);
+  t.assert(isIntType(error2.left));
+  t.assert(isStringType(error2.right));
+});
 
 //test('an instance of a record can be overloaded with any matching function', t => {
 //  const sourceFile = loadSourceFile(`

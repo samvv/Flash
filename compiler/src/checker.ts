@@ -14,6 +14,7 @@ import {
   SourceFile,
   Syntax,
   SyntaxKind,
+  isRecordDeclarationField,
 } from "./ast";
 import { getSymbolText } from "./common";
 import {
@@ -23,9 +24,10 @@ import {
   OccursCheckError,
   ParamCountMismatchError,
   UnificationError,
+  RecordFieldNotFoundError,
 } from "./errors";
 import { Program } from "./program";
-import { assert, FastStringMap } from "./util";
+import { assert, FastStringMap, prettyPrint } from "./util";
 import {
   Type,
   TypeKind,
@@ -39,6 +41,8 @@ import {
   boolType,
   stringType,
   areTypesEqual,
+  RecordType,
+  RecordFieldType,
 } from "./types"
 
 function getFreeVariablesOfType(type: Type): TypeVarSet {
@@ -54,6 +58,16 @@ function getFreeVariablesOfType(type: Type): TypeVarSet {
         break;
 
       case TypeKind.PrimType:
+        break;
+
+      case TypeKind.RecordType:
+        for (const [_fieldName, fieldType] of type) {
+          visit(fieldType);
+        }
+        break;
+
+      case TypeKind.RecordFieldType:
+        visit(type.recordType);
         break;
 
       case TypeKind.ArrowType:
@@ -381,10 +395,23 @@ export class TypeChecker {
 
       case SyntaxKind.RecordDeclaration:
       {
-        assert(node.members === null);
+        let type
+        if (node.members !== null) {
+          const fieldTypes: Array<[string, Type]> = [];
+          for (const member of node.members) {
+            assert(isRecordDeclarationField(member));
+            fieldTypes.push([
+              member.name.text,
+              this.inferNode(member.typeExpr, typeEnv, null),
+            ]);
+          }
+          type = new RecordType(fieldTypes, node, node);
+        } else {
+          type = new PrimType(node.name.text, undefined, node);
+        }
         typeEnv.set(
           node.name.text,
-          new ForallScheme([], new PrimType(node.name.text, undefined, node))
+          new ForallScheme([], type)
         );
         break;
       }
@@ -469,13 +496,43 @@ export class TypeChecker {
 
     switch (node.kind) {
 
+      case SyntaxKind.MemberExpression:
+      {
+        const recordType = this.inferNode(node.expression, typeEnv, returnType);
+        assert(node.path.length === 1);
+        const fieldName = node.path[0].text;
+        const fieldType = new TypeVar();
+        this.addConstraint([
+          fieldType,
+          new RecordFieldType(recordType, fieldName, node)
+        ])
+        return fieldType;
+      }
+
       case SyntaxKind.RecordExpression:
       {
         assert(node.typeRef.name.modulePath.length === 0);
         const recordName = getSymbolText(node.typeRef.name.name);
-        const recordType = typeEnv.lookup(recordName)
+        const recordType = typeEnv.lookup(recordName);
         if (recordType === null) {
           throw new BindingNotFoundError(node.typeRef.name, recordName);
+        }
+        assert(recordType.kind === TypeKind.RecordType);
+        const fieldTypes: Array<[string, Type]> = [];
+        for (const field of node.fields) {
+          let fieldType;
+          if (field.value === null) {
+            fieldType = typeEnv.lookup(field.name.text);
+            if (fieldType === null) {
+              throw new BindingNotFoundError(field.name, field.name.text);
+            }
+          } else {
+            fieldType = this.inferNode(field.value, typeEnv, returnType);
+          }
+          this.addConstraint([
+            recordType.getFieldType(field.name.text),
+            fieldType,
+          ]);
         }
         return recordType;
       }
@@ -685,7 +742,8 @@ export class TypeChecker {
 
       case SyntaxKind.CallExpression:
         {
-          // This type variable will contain the type that the call expression resolves to.
+          // This type variable will contain the type that the call expression
+          // resolves to.
           const returnType = new TypeVar(node);
 
           // First we build a type of the function that has been called. This
@@ -799,6 +857,36 @@ export class TypeChecker {
     for (const [a, b] of this.constraints) {
       this.unify(a, b);
     }
+    for (const type of this.nodeToType.values()) {
+      this.resolveRecordFieldTypes(type);
+    }
+  }
+
+  private resolveRecordFieldTypes(type: Type) {
+
+    type = type.solved;
+
+    if (type.kind === TypeKind.ArrowType) {
+      for (const paramType of type.paramTypes) {
+        this.resolveRecordFieldTypes(paramType);
+      }
+      this.resolveRecordFieldTypes(type.returnType);
+      return;
+    }
+
+    if (type.kind === TypeKind.RecordFieldType) {
+      const recordType = type.recordType.solved;
+      if (recordType.kind === TypeKind.RecordType) {
+        if (!recordType.hasField(type.fieldName)) {
+          throw new RecordFieldNotFoundError(type.fieldName);
+        }
+        type.solved = recordType.getFieldType(type.fieldName);
+      } else if (recordType.kind !== TypeKind.TypeVar) {
+        throw new RecordFieldNotFoundError(type.fieldName);
+      }
+      return;
+    }
+
   }
 
   private unify(a: Type, b: Type): void {
@@ -841,20 +929,24 @@ export class TypeChecker {
     }
 
     if (b.kind === TypeKind.TypeVar) {
-
-      // This 'occurs check' verifies that a type variable does not occur in
-      // the type that will be substituted. If omitted, we would be able to
-      // create cyclic types that cannot be valid.
-      if (a.hasTypeVariable(b)) {
-        throw new OccursCheckError(a, b);
-      }
-
-      // We set the substitution of the type variable on the reference of the
-      // type variable itself.
-      b.solved = a;
-
-      // No more work to do
+      this.unify(b, a);
       return;
+    }
+
+    if (a.kind === TypeKind.RecordType && b.kind === TypeKind.RecordType) {
+      if (a.declaration !== b.declaration) {
+        throw new UnificationError(a, b);
+      }
+      const visited = new Set<string>();
+      for (const [fieldName, fieldType] of b) {
+        visited.add(fieldName);
+        this.unify(a.getFieldType(fieldName), fieldType);
+      }
+      for (const [fieldName, _fieldType] of a) {
+        if (!visited.has(fieldName)) {
+          throw new RecordFieldNotFoundError(fieldName);
+        }
+      }
     }
 
     if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
@@ -881,19 +973,6 @@ export class TypeChecker {
     // combination of types must be invalid.
     throw new UnificationError(a, b);
   }
-
-  //private unifyMany(leftTypes: Type[], rightTypes: Type[]): TypeVarSubstitution {
-  //  let substitution = new TypeVarSubstitution();
-  //  for (let i = 0; i < leftTypes.length; i++) {
-  //    const localSubstitution = unifies(leftTypes[i], rightTypes[i]);
-  //    for (let k = i; k < leftTypes.length; k++) {
-  //      leftTypes[k] = leftTypes[k].applySubstitution(localSubstitution);
-  //      rightTypes[k] = rightTypes[k].applySubstitution(localSubstitution);
-  //    }
-  //    substitution = localSubstitution.composeWith(substitution);
-  //  }
-  //  return substitution;
-  //}
 
   private getTypeEnvForNode(node: Syntax, parentTypeEnv: TypeEnv, shouldClone: boolean): TypeEnv {
     const scopeNode = getNodeIntroducingScope(node)

@@ -1,5 +1,5 @@
 
-import { Syntax } from "./ast";
+import { isRecordDeclaration, RecordDeclaration, Syntax } from "./ast";
 import { FastStringMap, prettyPrintTag } from "./util";
 
 export enum TypeKind {
@@ -7,6 +7,8 @@ export enum TypeKind {
   PrimType,
   ArrowType,
   TupleType,
+  RecordFieldType,
+  RecordType,
 }
 
 export type Type
@@ -14,13 +16,32 @@ export type Type
   | PrimType
   | ArrowType
   | TupleType
+  | RecordFieldType
+  | RecordType
 
 export abstract class TypeBase {
 
   public abstract kind: TypeKind;
 
+  private solvedType?: Type;
+
   constructor(public node: Syntax | null) {
 
+  }
+
+  public get solved(): Type {
+    if (this.solvedType === undefined) {
+      return this as unknown as Type;
+    }
+    let currType: Type = this as unknown as Type;
+    do {
+      currType = currType.solvedType!;
+    } while (currType.solvedType !== undefined);
+    return this.solvedType = currType;
+  }
+
+  public set solved(newType: Type) {
+    this.solvedType = newType;
   }
 
   public abstract applySubstitution(substitution: TypeVarSubstitution): Type;
@@ -30,10 +51,6 @@ export abstract class TypeBase {
   public abstract deepClone(): Type;
 
   public abstract [prettyPrintTag](): string;
-
-  public get solved(): Type {
-    return this as unknown as Type;
-  }
 
 }
 
@@ -56,28 +73,11 @@ export class TypeVar extends TypeBase {
 
   public readonly kind = TypeKind.TypeVar;
 
-  private solvedType?: Type;
-
   constructor(
     node: Syntax | null = null,
     public varId = generateTypeVarId()
   ) {
     super(node);
-  }
-
-  public get solved(): Type {
-    if (this.solvedType === undefined) {
-      return this;
-    }
-    let currType: Type = this;
-    do {
-      currType = currType.solvedType!;
-    } while (currType.kind === TypeKind.TypeVar && currType.solvedType !== undefined);
-    return this.solvedType = currType;
-  }
-
-  public set solved(newType: Type) {
-    this.solvedType = newType;
   }
 
   public resolve(): Type {
@@ -234,16 +234,115 @@ export class ArrowType extends TypeBase {
 
 }
 
-function compareToDiff<T>(lessThan: (a: T, b: T) => boolean) {
-  return function (a: T, b: T) {
-    if (lessThan(a, b)) {
-      return -1;
-    } else if (lessThan(b, a)) {
-      return 1;
-    } else {
-      return 0;
-    }
+export class RecordType extends TypeBase {
+
+  public readonly kind = TypeKind.RecordType;
+
+  private fieldTypeMap: Map<string, Type>;
+
+  constructor(
+    fieldTypes: Iterable<[string, Type]>,
+    public declaration: RecordDeclaration,
+    node: Syntax | null = null
+  ) {
+    super(node);
+    this.fieldTypeMap = new Map(fieldTypes);
   }
+
+  public [Symbol.iterator]() {
+    return this.fieldTypeMap[Symbol.iterator]();
+  }
+
+  public hasField(fieldName: string): boolean {
+    return this.fieldTypeMap.has(fieldName);
+  }
+
+  public getFieldType(fieldName: string): Type {
+    if (!this.fieldTypeMap.has(fieldName)) {
+      throw new Error(`Trying to get a field named ${fieldName} on a record type that does not have it.`);
+    }
+    return this.fieldTypeMap.get(fieldName)!;
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): RecordType {
+    return new RecordType(
+      [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.applySubstitution(substitution)]),
+      this.node
+    );
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    for (const [_fieldName, fieldType] of this.fieldTypeMap) {
+      if (fieldType.hasTypeVariable(typeVar)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public deepClone(): RecordType {
+    return new RecordType(
+      [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.deepClone()]),
+      this.node,
+    );
+  }
+
+  public [prettyPrintTag](): string {
+    if (isRecordDeclaration(this.node)) {
+      return this.node.name.text;
+    }
+    return '{ ' + [...this.fieldTypeMap].map(([fieldName, fieldType]) => `${fieldName}: ${fieldType[prettyPrintTag]()}`).join(', ') + ' }';
+  }
+
+  public resolve(): RecordType {
+    return new RecordType(
+      [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.resolve()]),
+      this.node,
+    );
+  }
+
+}
+
+export class RecordFieldType extends TypeBase {
+
+  public readonly kind = TypeKind.RecordFieldType;
+
+  constructor(
+    public recordType: Type,
+    public fieldName: string,
+    node: Syntax | null = null
+  ) {
+    super(node);
+  }
+
+  public [prettyPrintTag](): string {
+    return this.recordType[prettyPrintTag]() + '.' + this.fieldName;
+  }
+
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    return this.recordType.hasTypeVariable(typeVar);
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): RecordFieldType {
+    return new RecordFieldType(
+      this.recordType.applySubstitution(substitution),
+      this.fieldName,
+      this.node,
+    );
+  }
+
+  public resolve(): Type {
+    return this.solved;
+  }
+
+  public deepClone(): RecordFieldType {
+    return new RecordFieldType(
+      this.recordType.deepClone(),
+      this.fieldName,
+      this.node,
+    );
+  }
+
 }
 
 export function isType(value: any): value is Type {
@@ -366,6 +465,10 @@ export function areTypesEqual(a: Type, b: Type): boolean {
 
   if (a.kind === TypeKind.PrimType && b.kind === TypeKind.PrimType) {
     return a.primId === b.primId;
+  }
+
+  if (a.kind === TypeKind.RecordType && b.kind === TypeKind.RecordType) {
+    return a.declaration === b.declaration;
   }
 
   if (a.kind === TypeKind.ArrowType && b.kind === TypeKind.ArrowType) {
