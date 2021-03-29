@@ -27,7 +27,7 @@ import {
   RecordFieldNotFoundError,
 } from "./errors";
 import { Program } from "./program";
-import { assert, FastStringMap, prettyPrint } from "./util";
+import { assert, FastStringMap } from "./util";
 import {
   Type,
   TypeKind,
@@ -329,7 +329,7 @@ export class TypeChecker {
       case SyntaxKind.BindPattern:
         {
           const varName = node.name.text;
-          const localValueType = valueType;
+          const localValueType = valueType; // FIXME
           localValueType.node = node;
           typeEnv.set(
             varName,
@@ -347,7 +347,8 @@ export class TypeChecker {
   private inferAssignment(
     node: Pattern,
     valueType: Type,
-    typeEnv: TypeEnv
+    typeEnv: TypeEnv,
+    returnType: Type | null,
   ) {
     switch (node.kind) {
       case SyntaxKind.BindPattern:
@@ -363,6 +364,15 @@ export class TypeChecker {
           localVarType,
           valueType,
         ])
+        break;
+      }
+      case SyntaxKind.ExpressionPattern:
+      {
+        const exprType = this.inferNode(node.expression, typeEnv, returnType);
+        this.addConstraint([
+          valueType,
+          exprType,
+        ]);
         break;
       }
       default:
@@ -501,12 +511,7 @@ export class TypeChecker {
         const recordType = this.inferNode(node.expression, typeEnv, returnType);
         assert(node.path.length === 1);
         const fieldName = node.path[0].text;
-        const fieldType = new TypeVar();
-        this.addConstraint([
-          fieldType,
-          new RecordFieldType(recordType, fieldName, node)
-        ])
-        return fieldType;
+        return new RecordFieldType(recordType, fieldName, node)
       }
 
       case SyntaxKind.RecordExpression:
@@ -805,6 +810,7 @@ export class TypeChecker {
             node.lhs,
             this.inferNode(node.rhs, typeEnv),
             typeEnv,
+            returnType,
           );
           return new TupleType([], node);
         }
@@ -854,39 +860,52 @@ export class TypeChecker {
    * 
    */
   private solveConstraints() {
-    for (const [a, b] of this.constraints) {
+
+    for (let [a, b] of this.constraints) {
+      this.simplify(a);
+      this.simplify(b);
       this.unify(a, b);
     }
+
     for (const type of this.nodeToType.values()) {
-      this.resolveRecordFieldTypes(type);
+      this.simplify(type.solved);
     }
+
   }
 
-  private resolveRecordFieldTypes(type: Type) {
-
+  private simplify(type: Type) {
     type = type.solved;
-
-    if (type.kind === TypeKind.ArrowType) {
-      for (const paramType of type.paramTypes) {
-        this.resolveRecordFieldTypes(paramType);
-      }
-      this.resolveRecordFieldTypes(type.returnType);
-      return;
-    }
-
     if (type.kind === TypeKind.RecordFieldType) {
       const recordType = type.recordType.solved;
       if (recordType.kind === TypeKind.RecordType) {
         if (!recordType.hasField(type.fieldName)) {
-          throw new RecordFieldNotFoundError(type.fieldName);
+          throw new RecordFieldNotFoundError(type.node!, recordType.declaration, recordType.declaration.name.text, a.fieldName);
         }
-        type.solved = recordType.getFieldType(type.fieldName);
+        const fieldType = recordType.getFieldType(type.fieldName);
+        type.solved = fieldType
+        this.simplify(fieldType);
       } else if (recordType.kind !== TypeKind.TypeVar) {
-        throw new RecordFieldNotFoundError(type.fieldName);
+        throw new TypeIsNoRecordError(type);
       }
       return;
     }
-
+    if (type.kind === TypeKind.PrimType || type.kind === TypeKind.TypeVar || type.kind === TypeKind.RecordType) {
+      return;
+    }
+    if (type.kind === TypeKind.ArrowType) {
+      for (const paramType of type.paramTypes) {
+        this.simplify(paramType)
+      }
+      this.simplify(type.returnType)
+      return;
+    }
+    if (type.kind === TypeKind.TupleType) {
+      for (const elementType of type.elements) {
+        this.simplify(elementType);
+      }
+      return;
+    }
+    throw new Error(`Could not simplify type: unexpected kind of type`)
   }
 
   private unify(a: Type, b: Type): void {
@@ -944,7 +963,7 @@ export class TypeChecker {
       }
       for (const [fieldName, _fieldType] of a) {
         if (!visited.has(fieldName)) {
-          throw new RecordFieldNotFoundError(fieldName);
+          throw new UnificationError(a, b);
         }
       }
     }

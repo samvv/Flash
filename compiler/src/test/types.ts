@@ -290,6 +290,21 @@ foo.b;
   t.assert(isIntType(bType));
 });
 
+test('assigning an expression of the correct type to a record field works', t => {
+  const sourceFile = loadSourceFile(`
+struct Foo {
+  a: String,
+  b: Int,
+}
+let mut foo: Foo;
+foo.a = "a";
+foo.a;
+`)
+  const aType = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+  t.assert(isStringType(aType));
+});
+
+
 test('constructing a record with a wrongly typed field fails', t => {
   const error1 = t.throws(() => loadSourceFile(`
 struct Foo {
@@ -316,6 +331,18 @@ foo.b;
   t.assert(error2 instanceof UnificationError);
   t.assert(isIntType(error2.left));
   t.assert(isStringType(error2.right));
+});
+
+test('assigning an invalid type to a record throws an error', t => {
+  const error = t.throws(() => loadSourceFile(`
+struct Foo {
+  a: String,
+  b: Int,
+}
+let mut foo: Foo;
+foo.a = 1;
+`)) as UnificationError;
+  t.assert(error instanceof UnificationError);
 });
 
 //test('an instance of a record can be overloaded with any matching function', t => {

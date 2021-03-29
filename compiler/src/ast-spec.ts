@@ -247,7 +247,7 @@ export interface TuplePattern extends Pattern {
   elements: TuplePatternElement[],
 }
 
-export interface RecordFieldPattern extends Syntax {
+export interface RecordPatternField extends Syntax {
   isRest: boolean,
   name: Identifier | null,
   pattern: Pattern | null,
@@ -255,7 +255,7 @@ export interface RecordFieldPattern extends Syntax {
 
 export interface RecordPattern extends Pattern {
   name: TypeExpression,
-  fields: RecordFieldPattern[],
+  fields: RecordPatternField[],
 }
 
 export interface Expression extends Syntax {}

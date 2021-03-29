@@ -1,10 +1,10 @@
 
 import test from "ava";
-import {BindPattern, Operator, SyntaxKind} from "../ast";
+import {BindPattern, ExpressionPattern, MemberExpression, Operator, SyntaxKind} from "../ast";
 import { createTokenStream } from "../common";
 import {Parser} from "../parser";
 
-test('the  parser correctly parses an operator definition', t => {
+test('the parser correctly parses an operator definition', t => {
 
   const parser = new Parser();
 
@@ -50,3 +50,13 @@ test('the  parser correctly parses an operator definition', t => {
 
 })
 
+
+test('the parser can parse a record field pattern', t => {
+
+  const parser = new Parser();
+  const tokens = createTokenStream(`foo.bar.baz`);
+  const patt = parser.parsePattern(tokens) as ExpressionPattern;
+  t.assert(patt.kind === SyntaxKind.ExpressionPattern);
+  t.assert(patt.expression.kind === SyntaxKind.MemberExpression);
+
+});

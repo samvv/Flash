@@ -1,7 +1,7 @@
 
 import chalk from "chalk";
 
-import { VariableDeclaration, Syntax, SyntaxKind } from "./ast";
+import { VariableDeclaration, Syntax, SyntaxKind, RecordDeclaration, isSyntax } from "./ast";
 import { format, MapLike, FormatArg, assert, escapeChar, countDigits } from "./util";
 import { TextPos, TextFile, TextSpan } from "./text";
 import { describeKind, EOF } from "./common";
@@ -40,7 +40,7 @@ export const E_NOT_CALLABLE = "The result of this expression is not callable."
 export const E_CANDIDATE_FUNCTION_REQUIRES_THIS_PARAMETER = "Candidate function requires this parameter."
 export const E_ARGUMENT_HAS_NO_CORRESPONDING_PARAMETER = "This argument is missing a corresponding parameter."
 export const E_INVALID_ARGUMENTS = "Invalid arguments passed to function '{name}'"
-export const E_RECORD_FIELD_NOT_FOUND = "Record {name} does not have a member declaration named {fieldName}"
+export const E_RECORD_FIELD_NOT_FOUND = "record '{name}' does not have a member declaration named '{fieldName}'"
 export const E_TYPE_NEVER_MATCHES = "Type '{type}' never matches anything."
 export const E_TYPES_MISSING_MEMBER = "Not all types resolve to a record with the a member named '{name}'."
 export const E_NODE_DOES_NOT_CONTAIN_MEMBER = "This node does not contain the the member '{name}'."
@@ -48,6 +48,12 @@ export const E_ARGUMENT_TYPE_NOT_ASSIGNABLE = "This argument's type '{argType}' 
 export const E_PARAMETER_DECLARED_HERE = "The parameter was declared here with type {type}."
 export const E_BUILTIN_TYPE_MISSING = "A built-in type named '{name}' was not found in the prelude."
 export const E_BOLTFILE_INVALID = "The Boltfile in {path} is not valid."
+
+interface CompileErrorFormatOptions {
+  indentation?: string;
+}
+
+const DEFAULT_INDENTATION = ''
 
 export abstract class CompileError extends Error {
 
@@ -68,7 +74,7 @@ export abstract class CompileError extends Error {
       message += `${this.node.span!.file.origPath}:${this.node.span!.start.line}:${this.node.span!.start.column}: `
     } else if (this.position) {
       assert(this.file !== undefined);
-      message += `${this.file!.origPath}:${this.position.line}:${this.position.column}: `
+      message += `${this.file.origPath}:${this.position.line}:${this.position.column}: `
     }
     message += this.messageText;
     return message;
@@ -82,7 +88,7 @@ export abstract class CompileError extends Error {
     return format(this.messageTemplate, args);
   }
 
-  public print({ indentation = ' ' } = {}) {
+  public format({ indentation = DEFAULT_INDENTATION }: CompileErrorFormatOptions = {}) {
 
     let out = indentation;
 
@@ -112,7 +118,7 @@ export abstract class CompileError extends Error {
     }
 
     if (span !== null) {
-      out += chalk.bold.yellow(`${span.file.origPath}:${span.start.line}:${span.start.column}: `);
+      out += chalk.bold.yellow(`${printPosition(span.file, span.start)}: `);
     }
 
     out += this.messageText + '\n\n';
@@ -125,13 +131,16 @@ export abstract class CompileError extends Error {
     for (const key of Object.keys(this)) {
       const arg = (this as any)[key];
       if (isType(arg) && arg.node !== null) {
-        out += printExcerpt(arg.node.span!)
+        out += printExcerpt(arg.node.span!, { indentation })
         out += '\n';
       }
     }
 
-    process.stderr.write(out);
+    return out;
+  }
 
+  public print(opts: CompileErrorFormatOptions = {}) {
+    process.stderr.write(this.format(opts));
   }
 
 }
@@ -160,8 +169,23 @@ export class RecordFieldNotFoundError extends CompileError {
 
   public readonly severity = 'error';
 
-  constructor(public fieldName: string) {
+  constructor(
+    public node: Syntax,
+    public declaration: RecordDeclaration,
+    public name: string,
+    public fieldName: string,
+  ) {
     super(E_RECORD_FIELD_NOT_FOUND);
+  }
+
+  public format({ indentation = DEFAULT_INDENTATION }: CompileErrorFormatOptions = {}) {
+    let out = super.format({ indentation })
+    if (this.declaration.span !== null) {
+      const nestedIndentation = indentation + '  ';
+      out += nestedIndentation + printPosition(this.declaration.span.file, this.declaration.span.start) + ' record defined at this location:\n\n'
+      out += printExcerpt(this.declaration.span!, { indentation: nestedIndentation, highlightRange: this.declaration.name.span!, highlightColor: 'blue' }) + '\n'
+    }
+    return out;
   }
 
 }
@@ -198,9 +222,14 @@ export class ParseError extends CompileError {
 
   constructor(actual: Syntax, expected: SyntaxKind[]) {
     super(E_PARSE_ERROR);
+    this.node = actual;
     this.actual = describeKind(actual.kind);
     this.expected = expected.map(describeKind);
   }
+
+}
+
+export class HardParseError extends ParseError {
 
 }
 
@@ -211,6 +240,7 @@ export class UnificationError extends CompileError {
   constructor(public left: Type, public right: Type) {
     super(E_TYPE_UNIFICATION_FAILURE);
   }
+
 }
 
 export class TypeNotFoundError extends CompileError {
@@ -268,39 +298,74 @@ export class UninitializedBindingError extends CompileError {
 
 }
 
-function printExcerpt(span: TextSpan, { indentation = '  ' } = {}) {
+function printPosition(file: TextFile, position: TextPos) {
+  return chalk.bold.yellow(`${file.origPath}:${position.line}:${position.column}`)
+}
+
+
+interface PrintExcerptOptions {
+  indentation?: string;
+  highlightColor?: 'red' | 'blue' | 'yellow' | 'magenta' | 'green'
+  highlightRange?: TextSpan | null;
+}
+
+function printExcerpt(span: TextSpan, {
+  indentation = '  ',
+  highlightRange,
+  highlightColor = 'red'
+}: PrintExcerptOptions = {}) {
+
+  if (highlightRange === undefined) {
+    highlightRange = span;
+  }
+
   let out = '';
+
   const content = span.file.getText();
+
   const startLine = Math.max(0, span.start.line-1-BOLT_DIAG_NUM_EXTRA_LINES)
   const lines = content.split('\n')
   const endLine = Math.min(lines.length, (span.end !== undefined ? span.end.line : startLine)+BOLT_DIAG_NUM_EXTRA_LINES)
   const gutterWidth = Math.max(2, countDigits(endLine+1))
+
   for (let i = startLine; i < endLine; i++) {
+
     const line = lines[i];
+
     let j = firstIndexOfNonEmpty(line);
+
     out +=  indentation + '  '+chalk.bgWhite.black(' '.repeat(gutterWidth-countDigits(i+1))+(i+1).toString())+' '+line+'\n'
-    const gutter = indentation + '  '+chalk.bgWhite.black(' '.repeat(gutterWidth))+' '
-    let mark: number;
-    let skip: number;
-    if (i === span.start.line-1 && i === span.end.line-1) {
-      skip = span.start.column-1;
-      mark = span.end.column-span.start.column;
-    } else if (i === span.start.line-1) {
-      skip = span.start.column-1;
-      mark = line.length-span.start.column+1;
-    } else if (i === span.end.line-1) {
-      skip = 0;
-      mark = span.end.column-1;
-    } else if (i > span.start.line-1 && i < span.end.line-1) {
-      skip = 0;
-      mark = line.length;
-    } else {
-      continue;
+
+    if (highlightRange) {
+
+      const gutter = indentation + '  '+chalk.bgWhite.black(' '.repeat(gutterWidth))+' '
+
+      let mark: number;
+      let skip: number;
+
+      if (i === highlightRange.start.line-1 && i === highlightRange.end.line-1) {
+        skip = highlightRange.start.column-1;
+        mark = highlightRange.end.column-highlightRange.start.column;
+      } else if (i === highlightRange.start.line-1) {
+        skip = highlightRange.start.column-1;
+        mark = line.length-highlightRange.start.column+1;
+      } else if (i === highlightRange.end.line-1) {
+        skip = 0;
+        mark = highlightRange.end.column-1;
+      } else if (i > highlightRange.start.line-1 && i < highlightRange.end.line-1) {
+        skip = 0;
+        mark = line.length;
+      } else {
+        continue;
+      }
+
+      if (j <= skip) {
+        j = 0;
+      }
+
+      out += gutter+' '.repeat(j+skip)+chalk[highlightColor]('~'.repeat(mark-j)) + '\n'
     }
-    if (j <= skip) {
-      j = 0;
-    }
-    out += gutter+' '.repeat(j+skip)+chalk.red('~'.repeat(mark-j)) + '\n'
+
   }
   return out;
 }

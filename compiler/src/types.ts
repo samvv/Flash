@@ -1,6 +1,6 @@
 
 import { isRecordDeclaration, RecordDeclaration, Syntax } from "./ast";
-import { FastStringMap, prettyPrintTag } from "./util";
+import { assert, FastStringMap, prettyPrintTag } from "./util";
 
 export enum TypeKind {
   TypeVar,
@@ -33,10 +33,10 @@ export abstract class TypeBase {
     if (this.solvedType === undefined) {
       return this as unknown as Type;
     }
-    let currType: Type = this as unknown as Type;
-    do {
-      currType = currType.solvedType!;
-    } while (currType.solvedType !== undefined);
+    let currType: Type = this.solvedType;
+    while (currType.solvedType !== undefined) {
+      currType = currType.solvedType;
+    }
     return this.solvedType = currType;
   }
 
@@ -267,6 +267,7 @@ export class RecordType extends TypeBase {
   public applySubstitution(substitution: TypeVarSubstitution): RecordType {
     return new RecordType(
       [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.applySubstitution(substitution)]),
+      this.declaration,
       this.node
     );
   }
@@ -283,6 +284,7 @@ export class RecordType extends TypeBase {
   public deepClone(): RecordType {
     return new RecordType(
       [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.deepClone()]),
+      this.declaration,
       this.node,
     );
   }
@@ -297,6 +299,7 @@ export class RecordType extends TypeBase {
   public resolve(): RecordType {
     return new RecordType(
       [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.resolve()]),
+      this.declaration,
       this.node,
     );
   }
@@ -332,7 +335,8 @@ export class RecordFieldType extends TypeBase {
   }
 
   public resolve(): Type {
-    return this.solved;
+    assert(this.solved !== this);
+    return this.solved.resolve();
   }
 
   public deepClone(): RecordFieldType {

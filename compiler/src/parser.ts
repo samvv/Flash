@@ -1,4 +1,6 @@
 
+// FIXME 'a || b' is not correctly parsed in a pattern expression due to the cheap check of KIND_NO_EXPRESSION
+
 import {
   SyntaxKind,
   kindToString,
@@ -58,7 +60,6 @@ import {
   createFunctionTypeExpression,
   RecordPattern,
   createRecordPattern,
-  createRecordFieldPattern,
   isPunctuated,
   Token,
   createQuoteExpression,
@@ -89,6 +90,7 @@ import {
   createEnumDeclaration,
   EnumDeclarationElement,
   EnumDeclaration,
+  createRecordPatternField,
 } from "./ast"
 
 import {
@@ -98,7 +100,7 @@ import {
   setOrigNodeRange,
   createTokenStream,
 } from "./common"
-import { ParseError } from "./errors";
+import { HardParseError, ParseError } from "./errors";
 import { Stream, uniq } from "./util"
 
 import { Scanner } from "./scanner"
@@ -107,7 +109,24 @@ import { Package } from "./package"
 
 export type TokenStream = Stream<Token>;
 
-export function isModifierKeyword(kind: SyntaxKind) {
+const KIND_NO_EXPRESSION = [
+  SyntaxKind.EndOfFile,
+  SyntaxKind.Semi,
+  SyntaxKind.EqSign,
+  SyntaxKind.Braced,
+  SyntaxKind.Parenthesized,
+  SyntaxKind.Bracketed,
+  SyntaxKind.LtSign,
+  SyntaxKind.GtSign,
+  SyntaxKind.RArrow,
+  SyntaxKind.RArrowAlt,
+  SyntaxKind.LArrow,
+  SyntaxKind.Colon,
+  SyntaxKind.VBar,
+  SyntaxKind.Comma,
+];
+
+function isModifierKeyword(kind: SyntaxKind) {
   return kind === SyntaxKind.PubKeyword
       || kind === SyntaxKind.ForeignKeyword;
 }
@@ -333,7 +352,7 @@ export class Parser {
       if (t0.kind === SyntaxKind.EqSign) {
         pattern = this.parsePattern(innerTokens);
       }
-      let member = createRecordFieldPattern(isRest, name, pattern);
+      let member = createRecordPatternField(isRest, name, pattern);
       setOrigNodeRange(member, firstToken, t0);
       members.push(member);
 
@@ -354,7 +373,7 @@ export class Parser {
     const t1 = tokens.peek(2);
     if (t0.kind === SyntaxKind.Identifier && t1.kind === SyntaxKind.Braced) {
       return this.parseRecordPattern(tokens);
-    } else if (t0.kind === SyntaxKind.Identifier) {
+    } else if (t0.kind === SyntaxKind.Identifier && KIND_NO_EXPRESSION.indexOf(t1.kind) !== -1) {
       return this.parseBindPattern(tokens);
     } else if (t0.kind === SyntaxKind.Operator && t0.text === '^') {
       tokens.get();
@@ -815,7 +834,7 @@ export class Parser {
       tokens.join(forked);
       return recordExpr;
     } catch (e) {
-      if (!(e instanceof ParseError)) {
+      if (!(e instanceof ParseError) || (e instanceof HardParseError)) {
         throw e;
       }
     }
@@ -865,7 +884,7 @@ export class Parser {
 
       if (path.length > 0) {
         const node = createMemberExpression(result, path);
-        setOrigNodeRange(node, firstToken, t2);
+        setOrigNodeRange(node, firstToken, path[path.length-1]);
         result = node;
       }
 
@@ -1011,10 +1030,10 @@ export class Parser {
     return node;
   }
 
-  public parseAsssignStatement(tokens: TokenStream): AssignStatement {
+  public parseAssignStatement(tokens: TokenStream): AssignStatement {
     const pattern = this.parsePattern(tokens);
-    const t1 = tokens.get();
-    assertToken(t1, SyntaxKind.EqSign);
+    const t2 = tokens.get();
+    assertToken(t2, SyntaxKind.EqSign);
     const expr = this.parseExpression(tokens);
     const result = createAssignStatement(pattern, expr);
     setOrigNodeRange(result, pattern, expr);
@@ -1037,11 +1056,11 @@ export class Parser {
 
     try {
       const forked = tokens.fork();
-      const result = this.parseAsssignStatement(forked);
+      const result = this.parseAssignStatement(forked);
       tokens.join(forked);
       return result;
     } catch (e) {
-      if (!(e instanceof ParseError)) {
+      if (!(e instanceof ParseError) || (e instanceof HardParseError)) {
         throw e;
       }
     }
@@ -1249,14 +1268,15 @@ export class Parser {
         assertToken(t4, SyntaxKind.Colon);
         const type = this.parseTypeExpression(innerTokens);
         const field = createRecordDeclarationField(name as Identifier, type);
+        setOrigNodeRange(field, name, type);
+        members.push(field);
         const t5 = innerTokens.get();
         if (t5.kind === SyntaxKind.EndOfFile) {
           break;
         }
         assertToken(t5, SyntaxKind.Comma);
-        setOrigNodeRange(field, name, type);
-        members.push(field);
       }
+
 
     }
 

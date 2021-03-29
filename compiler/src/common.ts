@@ -17,7 +17,7 @@ import { BOLT_SUPPORTED_LANGUAGES } from "./constants"
 import { assert, registerClass, GeneratorStream, FastMultiMap } from "./util";
 import { TextSpan, TextPos, TextFile } from "./text";
 import { Scanner } from "./scanner";
-import { ParseError } from "./errors";
+import { HardParseError, ParseError } from "./errors";
 import { NODE_TYPES } from "./ast"
 import { Package } from "./package";
 
@@ -152,7 +152,13 @@ export interface OperatorInfo {
   precedence: number;
 }
 
-export function assertToken(node: Token, kind: SyntaxKind, isHardError = false) {
+export function forceToken(node: Token, kind: SyntaxKind) {
+  if (node.kind !== kind) {
+    throw new HardParseError(node, [ kind ]);
+  }
+}
+
+export function assertToken(node: Token, kind: SyntaxKind) {
   if (node.kind !== kind) {
     throw new ParseError(node, [ kind ]);
   }

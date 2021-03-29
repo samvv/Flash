@@ -148,7 +148,7 @@ export class Identifier extends TokenBase {
     *getChildNodes(): Iterable<IdentifierChild> { }
 }
 
-export type IdentifierParent = QualName | TypeParameter | BindPattern | RecordFieldPattern | RecordFieldValue | QuoteExpression | MemberExpression | Module | TraitDeclaration | TypeAliasDeclaration | EnumDeclaration | RecordDeclarationField | RecordDeclaration | MacroCall | never;
+export type IdentifierParent = QualName | TypeParameter | BindPattern | RecordPatternField | RecordFieldValue | QuoteExpression | MemberExpression | Module | TraitDeclaration | TypeAliasDeclaration | EnumDeclaration | RecordDeclarationField | RecordDeclaration | MacroCall | never;
 
 export type IdentifierChild = never;
 
@@ -926,7 +926,7 @@ export class BindPattern extends PatternBase {
     *getChildNodes(): Iterable<BindPatternChild> { yield this.name; }
 }
 
-export type BindPatternParent = TypePattern | TuplePatternElement | RecordFieldPattern | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
+export type BindPatternParent = TypePattern | TuplePatternElement | RecordPatternField | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
 
 export type BindPatternChild = Identifier | never;
 
@@ -941,7 +941,7 @@ export class TypePattern extends PatternBase {
     *getChildNodes(): Iterable<TypePatternChild> { yield this.typeExpr; yield this.nestedPattern; }
 }
 
-export type TypePatternParent = TypePattern | TuplePatternElement | RecordFieldPattern | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
+export type TypePatternParent = TypePattern | TuplePatternElement | RecordPatternField | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
 
 export type TypePatternChild = TypeExpression | Pattern | never;
 
@@ -956,7 +956,7 @@ export class ExpressionPattern extends PatternBase {
     *getChildNodes(): Iterable<ExpressionPatternChild> { yield this.expression; }
 }
 
-export type ExpressionPatternParent = TypePattern | TuplePatternElement | RecordFieldPattern | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
+export type ExpressionPatternParent = TypePattern | TuplePatternElement | RecordPatternField | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
 
 export type ExpressionPatternChild = Expression | never;
 
@@ -987,7 +987,7 @@ export class TuplePattern extends PatternBase {
         yield element; }
 }
 
-export type TuplePatternParent = TypePattern | TuplePatternElement | RecordFieldPattern | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
+export type TuplePatternParent = TypePattern | TuplePatternElement | RecordPatternField | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
 
 export type TuplePatternChild = TuplePatternElement | never;
 
@@ -995,38 +995,38 @@ export function isTuplePattern(value: any): value is TuplePattern { return value
 
 export function createTuplePattern(elements: TuplePatternElement[], span: TextSpan | null = null, parentNode: Syntax | null = null): TuplePattern { return new TuplePattern(elements, span, parentNode); }
 
-export class RecordFieldPattern extends SyntaxBase {
-    readonly kind = SyntaxKind.RecordFieldPattern;
-    parentNode: null | RecordFieldPatternParent = null;
+export class RecordPatternField extends SyntaxBase {
+    readonly kind = SyntaxKind.RecordPatternField;
+    parentNode: null | RecordPatternFieldParent = null;
     constructor(public isRest: boolean, public name: Identifier | null, public pattern: Pattern | null, span: TextSpan | null = null, parentNode: Syntax | null = null) { super(span, parentNode); }
-    *getChildNodes(): Iterable<RecordFieldPatternChild> { if (this.name !== null)
+    *getChildNodes(): Iterable<RecordPatternFieldChild> { if (this.name !== null)
         yield this.name; if (this.pattern !== null)
         yield this.pattern; }
 }
 
-export type RecordFieldPatternParent = RecordPattern | never;
+export type RecordPatternFieldParent = RecordPattern | never;
 
-export type RecordFieldPatternChild = Identifier | Pattern | never;
+export type RecordPatternFieldChild = Identifier | Pattern | never;
 
-export function isRecordFieldPattern(value: any): value is RecordFieldPattern { return value.kind === SyntaxKind.RecordFieldPattern; }
+export function isRecordPatternField(value: any): value is RecordPatternField { return value.kind === SyntaxKind.RecordPatternField; }
 
-export function createRecordFieldPattern(isRest: boolean, name: Identifier | null, pattern: Pattern | null, span: TextSpan | null = null, parentNode: Syntax | null = null): RecordFieldPattern { return new RecordFieldPattern(isRest, name, pattern, span, parentNode); }
+export function createRecordPatternField(isRest: boolean, name: Identifier | null, pattern: Pattern | null, span: TextSpan | null = null, parentNode: Syntax | null = null): RecordPatternField { return new RecordPatternField(isRest, name, pattern, span, parentNode); }
 
 export class RecordPattern extends PatternBase {
     readonly kind = SyntaxKind.RecordPattern;
     parentNode: null | RecordPatternParent = null;
-    constructor(public name: TypeExpression, public fields: RecordFieldPattern[], span: TextSpan | null = null, parentNode: Syntax | null = null) { super(span, parentNode); }
+    constructor(public name: TypeExpression, public fields: RecordPatternField[], span: TextSpan | null = null, parentNode: Syntax | null = null) { super(span, parentNode); }
     *getChildNodes(): Iterable<RecordPatternChild> { yield this.name; for (let element of this.fields)
         yield element; }
 }
 
-export type RecordPatternParent = TypePattern | TuplePatternElement | RecordFieldPattern | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
+export type RecordPatternParent = TypePattern | TuplePatternElement | RecordPatternField | MatchArm | AssignStatement | Parameter | VariableDeclaration | never;
 
-export type RecordPatternChild = TypeExpression | RecordFieldPattern | never;
+export type RecordPatternChild = TypeExpression | RecordPatternField | never;
 
 export function isRecordPattern(value: any): value is RecordPattern { return value.kind === SyntaxKind.RecordPattern; }
 
-export function createRecordPattern(name: TypeExpression, fields: RecordFieldPattern[], span: TextSpan | null = null, parentNode: Syntax | null = null): RecordPattern { return new RecordPattern(name, fields, span, parentNode); }
+export function createRecordPattern(name: TypeExpression, fields: RecordPatternField[], span: TextSpan | null = null, parentNode: Syntax | null = null): RecordPattern { return new RecordPattern(name, fields, span, parentNode); }
 
 export class ExpressionBase extends SyntaxBase {
 }
@@ -1717,9 +1717,9 @@ export function isSourceElement(value: Syntax): value is SourceElement { return 
 export function kindToString(kind: SyntaxKind): string { if (SyntaxKind[kind] === undefined)
     throw new Error("The SyntaxKind value that was passed in is not valid."); return SyntaxKind[kind]; }
 
-export type Syntax = EndOfFile | StringLiteral | IntegerLiteral | Identifier | Operator | Assignment | Comma | Semi | Colon | ColonColon | Dot | DotDot | RArrow | RArrowAlt | LArrow | EqSign | GtSign | ExMark | LtSign | VBar | ElseKeyword | IfKeyword | WhereKeyword | QuoteKeyword | FnKeyword | ForeignKeyword | ForKeyword | LetKeyword | ReturnKeyword | LoopKeyword | YieldKeyword | MatchKeyword | ImportKeyword | ExportKeyword | PubKeyword | ModKeyword | MutKeyword | EnumKeyword | StructKeyword | TypeKeyword | TraitKeyword | ImplKeyword | Parenthesized | Braced | Bracketed | SourceFile | QualName | TypeOfExpression | ReferenceTypeExpression | FunctionTypeExpression | LiftedTypeExpression | TypeParameter | BindPattern | TypePattern | ExpressionPattern | TuplePatternElement | TuplePattern | RecordFieldPattern | RecordPattern | RecordExpression | RecordFieldValue | QuoteExpression | TupleExpression | ReferenceExpression | MemberExpression | FunctionExpression | CallExpression | YieldExpression | MatchArm | MatchExpression | CaseStatementCase | CaseStatement | BlockExpression | ConstantExpression | ReturnStatement | ConditionalCase | ConditionalStatement | ResumeStatement | ExpressionStatement | AssignStatement | LoopStatement | Parameter | Module | FunctionDeclaration | VariableDeclaration | PlainImportSymbol | ImportDeclaration | PlainExportSymbol | ExportDeclaration | TraitDeclaration | ImplDeclaration | TypeAliasDeclaration | EnumDeclaration | RecordDeclarationField | RecordDeclaration | MacroCall;
+export type Syntax = EndOfFile | StringLiteral | IntegerLiteral | Identifier | Operator | Assignment | Comma | Semi | Colon | ColonColon | Dot | DotDot | RArrow | RArrowAlt | LArrow | EqSign | GtSign | ExMark | LtSign | VBar | ElseKeyword | IfKeyword | WhereKeyword | QuoteKeyword | FnKeyword | ForeignKeyword | ForKeyword | LetKeyword | ReturnKeyword | LoopKeyword | YieldKeyword | MatchKeyword | ImportKeyword | ExportKeyword | PubKeyword | ModKeyword | MutKeyword | EnumKeyword | StructKeyword | TypeKeyword | TraitKeyword | ImplKeyword | Parenthesized | Braced | Bracketed | SourceFile | QualName | TypeOfExpression | ReferenceTypeExpression | FunctionTypeExpression | LiftedTypeExpression | TypeParameter | BindPattern | TypePattern | ExpressionPattern | TuplePatternElement | TuplePattern | RecordPatternField | RecordPattern | RecordExpression | RecordFieldValue | QuoteExpression | TupleExpression | ReferenceExpression | MemberExpression | FunctionExpression | CallExpression | YieldExpression | MatchArm | MatchExpression | CaseStatementCase | CaseStatement | BlockExpression | ConstantExpression | ReturnStatement | ConditionalCase | ConditionalStatement | ResumeStatement | ExpressionStatement | AssignStatement | LoopStatement | Parameter | Module | FunctionDeclaration | VariableDeclaration | PlainImportSymbol | ImportDeclaration | PlainExportSymbol | ExportDeclaration | TraitDeclaration | ImplDeclaration | TypeAliasDeclaration | EnumDeclaration | RecordDeclarationField | RecordDeclaration | MacroCall;
 
-export const NODE_TYPES = { EndOfFile, StringLiteral, IntegerLiteral, Identifier, Operator, Assignment, Comma, Semi, Colon, ColonColon, Dot, DotDot, RArrow, RArrowAlt, LArrow, EqSign, GtSign, ExMark, LtSign, VBar, ElseKeyword, IfKeyword, WhereKeyword, QuoteKeyword, FnKeyword, ForeignKeyword, ForKeyword, LetKeyword, ReturnKeyword, LoopKeyword, YieldKeyword, MatchKeyword, ImportKeyword, ExportKeyword, PubKeyword, ModKeyword, MutKeyword, EnumKeyword, StructKeyword, TypeKeyword, TraitKeyword, ImplKeyword, Parenthesized, Braced, Bracketed, SourceFile, QualName, TypeOfExpression, ReferenceTypeExpression, FunctionTypeExpression, LiftedTypeExpression, TypeParameter, BindPattern, TypePattern, ExpressionPattern, TuplePatternElement, TuplePattern, RecordFieldPattern, RecordPattern, RecordExpression, RecordFieldValue, QuoteExpression, TupleExpression, ReferenceExpression, MemberExpression, FunctionExpression, CallExpression, YieldExpression, MatchArm, MatchExpression, CaseStatementCase, CaseStatement, BlockExpression, ConstantExpression, ReturnStatement, ConditionalCase, ConditionalStatement, ResumeStatement, ExpressionStatement, AssignStatement, LoopStatement, Parameter, Module, FunctionDeclaration, VariableDeclaration, PlainImportSymbol, ImportDeclaration, PlainExportSymbol, ExportDeclaration, TraitDeclaration, ImplDeclaration, TypeAliasDeclaration, EnumDeclaration, RecordDeclarationField, RecordDeclaration, MacroCall };
+export const NODE_TYPES = { EndOfFile, StringLiteral, IntegerLiteral, Identifier, Operator, Assignment, Comma, Semi, Colon, ColonColon, Dot, DotDot, RArrow, RArrowAlt, LArrow, EqSign, GtSign, ExMark, LtSign, VBar, ElseKeyword, IfKeyword, WhereKeyword, QuoteKeyword, FnKeyword, ForeignKeyword, ForKeyword, LetKeyword, ReturnKeyword, LoopKeyword, YieldKeyword, MatchKeyword, ImportKeyword, ExportKeyword, PubKeyword, ModKeyword, MutKeyword, EnumKeyword, StructKeyword, TypeKeyword, TraitKeyword, ImplKeyword, Parenthesized, Braced, Bracketed, SourceFile, QualName, TypeOfExpression, ReferenceTypeExpression, FunctionTypeExpression, LiftedTypeExpression, TypeParameter, BindPattern, TypePattern, ExpressionPattern, TuplePatternElement, TuplePattern, RecordPatternField, RecordPattern, RecordExpression, RecordFieldValue, QuoteExpression, TupleExpression, ReferenceExpression, MemberExpression, FunctionExpression, CallExpression, YieldExpression, MatchArm, MatchExpression, CaseStatementCase, CaseStatement, BlockExpression, ConstantExpression, ReturnStatement, ConditionalCase, ConditionalStatement, ResumeStatement, ExpressionStatement, AssignStatement, LoopStatement, Parameter, Module, FunctionDeclaration, VariableDeclaration, PlainImportSymbol, ImportDeclaration, PlainExportSymbol, ExportDeclaration, TraitDeclaration, ImplDeclaration, TypeAliasDeclaration, EnumDeclaration, RecordDeclarationField, RecordDeclaration, MacroCall };
 
 export enum SyntaxKind {
     EndOfFile,
@@ -1779,7 +1779,7 @@ export enum SyntaxKind {
     ExpressionPattern,
     TuplePatternElement,
     TuplePattern,
-    RecordFieldPattern,
+    RecordPatternField,
     RecordPattern,
     RecordExpression,
     RecordFieldValue,
