@@ -25,6 +25,7 @@ import {
   ParamCountMismatchError,
   UnificationError,
   RecordFieldNotFoundError,
+  TypeIsNoRecordError,
 } from "./errors";
 import { Program } from "./program";
 import { assert, FastStringMap } from "./util";
@@ -879,13 +880,13 @@ export class TypeChecker {
       const recordType = type.recordType.solved;
       if (recordType.kind === TypeKind.RecordType) {
         if (!recordType.hasField(type.fieldName)) {
-          throw new RecordFieldNotFoundError(type.node!, recordType.declaration, recordType.declaration.name.text, a.fieldName);
+          throw new RecordFieldNotFoundError(type.node!, recordType.declaration, recordType.declaration.name.text, type.fieldName);
         }
         const fieldType = recordType.getFieldType(type.fieldName);
         type.solved = fieldType
         this.simplify(fieldType);
       } else if (recordType.kind !== TypeKind.TypeVar) {
-        throw new TypeIsNoRecordError(type);
+        throw new TypeIsNoRecordError(recordType, type.fieldName);
       }
       return;
     }

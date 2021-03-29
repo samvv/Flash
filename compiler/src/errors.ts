@@ -48,6 +48,7 @@ export const E_ARGUMENT_TYPE_NOT_ASSIGNABLE = "This argument's type '{argType}' 
 export const E_PARAMETER_DECLARED_HERE = "The parameter was declared here with type {type}."
 export const E_BUILTIN_TYPE_MISSING = "A built-in type named '{name}' was not found in the prelude."
 export const E_BOLTFILE_INVALID = "The Boltfile in {path} is not valid."
+export const E_TYPE_IS_NO_RECORD = "Trying to access field {fieldName} of type {type} which is not a record"
 
 interface CompileErrorFormatOptions {
   indentation?: string;
@@ -186,6 +187,19 @@ export class RecordFieldNotFoundError extends CompileError {
       out += printExcerpt(this.declaration.span!, { indentation: nestedIndentation, highlightRange: this.declaration.name.span!, highlightColor: 'blue' }) + '\n'
     }
     return out;
+  }
+
+}
+
+export class TypeIsNoRecordError extends CompileError {
+
+  public readonly severity = 'error';
+
+  constructor(
+    public type: Type,
+    public fieldName: string,
+  ) {
+    super(E_TYPE_IS_NO_RECORD);
   }
 
 }
