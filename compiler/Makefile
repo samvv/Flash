@@ -1,6 +1,5 @@
 
 all: src/ast.ts
-	bolt check ../stdlib test.bolt
 	npm test
 
 src/ast.ts: src/ast-spec.ts

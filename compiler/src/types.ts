@@ -1,14 +1,16 @@
 
 import { isRecordDeclaration, RecordDeclaration, Syntax } from "./ast";
-import { assert, FastStringMap, prettyPrintTag } from "./util";
+import { assert, FastMultiMap, FastStringMap, prettyPrintTag } from "./util";
 
 export enum TypeKind {
   TypeVar,
   PrimType,
   ArrowType,
   TupleType,
-  RecordFieldType,
+  MemberType,
   RecordType,
+  OverloadType,
+  NeverType,
 }
 
 export type Type
@@ -16,8 +18,12 @@ export type Type
   | PrimType
   | ArrowType
   | TupleType
-  | RecordFieldType
+  | MemberType
   | RecordType
+  | OverloadType
+  | NeverType
+
+export type Signature = Type[] | null;
 
 export abstract class TypeBase {
 
@@ -46,9 +52,18 @@ export abstract class TypeBase {
 
   public abstract applySubstitution(substitution: TypeVarSubstitution): Type;
 
-  public abstract hasTypeVariable(typeVar: TypeVar): boolean;
+  public abstract getFreeTypeVars(): Iterable<TypeVar>;
 
-  public abstract deepClone(): Type;
+  public hasTypeVariable(typeVar: TypeVar): boolean {
+    for (const otherTypeVar of this.getFreeTypeVars()) {
+      if (otherTypeVar.varId === typeVar.varId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public abstract shallowClone(): Type;
 
   public abstract [prettyPrintTag](): string;
 
@@ -84,11 +99,11 @@ export class TypeVar extends TypeBase {
     return this.solved;
   }
 
-  public hasTypeVariable(typeVar: TypeVar): boolean {
-    return typeVar.varId === this.varId;
+  public *getFreeTypeVars() {
+    yield this;
   }
 
-  public deepClone(): TypeVar {
+  public shallowClone(): TypeVar {
     return new TypeVar(this.node, this.varId);
   }
 
@@ -106,6 +121,32 @@ export class TypeVar extends TypeBase {
 
 }
 
+export class NeverType extends TypeBase {
+
+  public readonly kind = TypeKind.NeverType;
+
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+
+  }
+
+  public shallowClone(): NeverType {
+    return new NeverType(this.node);
+  }
+
+  public resolve() {
+    return this;
+  }
+
+  public applySubstitution(_substitution: TypeVarSubstitution): Type {
+    return this;
+  }
+
+  public [prettyPrintTag](): string {
+    return 'never';
+  }
+
+}
+
 export class TupleType extends TypeBase {
 
   public readonly kind = TypeKind.TupleType;
@@ -117,12 +158,14 @@ export class TupleType extends TypeBase {
     super(node);
   }
 
-  public hasTypeVariable(typeVar: TypeVar): boolean {
-    return this.elements.some(type => type.hasTypeVariable(typeVar))
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+    for (const element of this.elements) {
+      yield* element.getFreeTypeVars();
+    }
   }
 
-  public deepClone(): TupleType {
-    return new TupleType(this.elements.map(element => element.deepClone()), this.node);
+  public shallowClone(): TupleType {
+    return new TupleType(this.elements, this.node);
   }
 
   public applySubstitution(substitution: TypeVarSubstitution): Type {
@@ -163,12 +206,12 @@ export class PrimType extends TypeBase {
     this.primId = primId ?? nextPrimTypeId++;
   }
 
-  public deepClone(): PrimType {
-    return new PrimType(this.displayName, this.primId, this.node);
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+
   }
 
-  public hasTypeVariable(_typeVar: TypeVar): boolean {
-    return false;
+  public shallowClone(): PrimType {
+    return new PrimType(this.displayName, this.primId, this.node);
   }
 
   public resolve(): Type {
@@ -192,28 +235,33 @@ export class ArrowType extends TypeBase {
   constructor(
     public paramTypes: Type[],
     public returnType: Type,
+    public overloaded: boolean,
     node: Syntax | null = null
   ) {
     super(node);
   }
 
-  public deepClone(): ArrowType {
+  public shallowClone(): ArrowType {
     return new ArrowType(
-      this.paramTypes.map(paramType => paramType.deepClone()),
-      this.returnType.deepClone(),
+      this.paramTypes,
+      this.returnType,
+      this.overloaded,
       this.node
     )
   }
 
-  public hasTypeVariable(typeVar: TypeVar): boolean {
-    return this.paramTypes.some(paramType => paramType.hasTypeVariable(typeVar))
-        || this.returnType.hasTypeVariable(typeVar);
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+    for (const paramType of this.paramTypes) {
+      yield* paramType.getFreeTypeVars();
+    }
+    yield* this.returnType.getFreeTypeVars();
   }
 
   public applySubstitution(substitution: TypeVarSubstitution): Type {
     return new ArrowType(
       this.paramTypes.map(type => type.applySubstitution(substitution)),
       this.returnType.applySubstitution(substitution),
+      this.overloaded,
       this.node
     )
   }
@@ -221,7 +269,9 @@ export class ArrowType extends TypeBase {
   public resolve(): Type {
     return new ArrowType(
       this.paramTypes.map(type => type.resolve()),
-      this.returnType.resolve()
+      this.returnType.resolve(),
+      this.overloaded,
+      this.node,
     );
   }
 
@@ -272,6 +322,12 @@ export class RecordType extends TypeBase {
     );
   }
 
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+    for (const fieldType of this.fieldTypeMap.values()) {
+      yield* fieldType.getFreeTypeVars();
+    }
+  }
+
   public hasTypeVariable(typeVar: TypeVar): boolean {
     for (const [_fieldName, fieldType] of this.fieldTypeMap) {
       if (fieldType.hasTypeVariable(typeVar)) {
@@ -281,9 +337,9 @@ export class RecordType extends TypeBase {
     return false;
   }
 
-  public deepClone(): RecordType {
+  public shallowClone(): RecordType {
     return new RecordType(
-      [...this.fieldTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.deepClone()]),
+      this.fieldTypeMap,
       this.declaration,
       this.node,
     );
@@ -306,30 +362,138 @@ export class RecordType extends TypeBase {
 
 }
 
-export class RecordFieldType extends TypeBase {
+//export class OverloadType extends TypeBase {
 
-  public readonly kind = TypeKind.RecordFieldType;
+//  public readonly kind = TypeKind.OverloadType;
+
+//  private memberTypeMap: FastStringMap<string, Type>;
+
+//  constructor(
+//    memberTypes: Iterable<[string, Type]>,
+//    public declaration: RecordDeclaration,
+//    node: Syntax | null = null
+//  ) {
+//    super(node);
+//    this.memberTypeMap = new FastStringMap(memberTypes);
+//  }
+
+//  public [Symbol.iterator]() {
+//    return this.memberTypeMap[Symbol.iterator]();
+//  }
+
+//  public hasMember(fieldName: string): boolean {
+//    return this.memberTypeMap.has(fieldName);
+//  }
+
+//  public getMemberTypes(fieldName: string): Type {
+//    if (!this.memberTypeMap.has(fieldName)) {
+//      throw new Error(`Trying to get a field named ${fieldName} on a record type that does not have it.`);
+//    }
+//    return this.memberTypeMap.get(fieldName)!;
+//  }
+
+//  public applySubstitution(substitution: TypeVarSubstitution): OverloadType {
+//    return new OverloadType(
+//      [...this.memberTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.applySubstitution(substitution)]),
+//      this.declaration,
+//      this.node
+//    );
+//  }
+
+//  public *getTypeVars(): Iterable<TypeVar> {
+//    for (const memberType of this.memberTypeMap.values()) {
+//      yield* memberType.getTypeVars();
+//    }
+//  }
+
+//  public deepClone(): OverloadType {
+//    return new OverloadType(
+//      [...this.memberTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.deepClone()]),
+//      this.declaration,
+//      this.node,
+//    );
+//  }
+
+//  public [prettyPrintTag](): string {
+//    if (isRecordDeclaration(this.node)) {
+//      return this.node.name.text;
+//    }
+//    return '{ ' + [...this.memberTypeMap].map(([fieldName, fieldType]) => `${fieldName}: ${fieldType[prettyPrintTag]()}`).join(', ') + ' }';
+//  }
+
+//  public resolve(): OverloadType {
+//    return new OverloadType(
+//      [...this.memberTypeMap].map(([fieldName, fieldType]) => [fieldName, fieldType.resolve()]),
+//      this.declaration,
+//      this.node,
+//    );
+//  }
+
+//}
+
+export class OverloadType extends TypeBase {
+
+  public readonly kind = TypeKind.OverloadType;
+
+  constructor(public typeEnv: TypeEnv, public types: Type[]) {
+    super(null);
+  }
+
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+    for (const type of this.types) {
+      yield* type.getFreeTypeVars();
+    }
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Type {
+    return new OverloadType(
+      this.typeEnv,
+      this.types.map(type => type.applySubstitution(substitution))
+    );
+  }
+
+  public resolve(): Type {
+    throw new Error(`Cannot resolve an overloaded type to a single type. The type should have been resolved.`);
+  }
+
+  public shallowClone(): OverloadType {
+    return new OverloadType(this.typeEnv, this.types);
+  }
+
+  public [prettyPrintTag](): string {
+    return this.types.map(type => type[prettyPrintTag]()).join(' | ');
+  }
+
+}
+
+export class MemberType extends TypeBase {
+
+  public readonly kind = TypeKind.MemberType;
 
   constructor(
-    public recordType: Type,
+    public sourceType: Type,
     public fieldName: string,
+    public signature: Signature,
+    public scope: TypeEnv,
     node: Syntax | null = null
   ) {
     super(node);
   }
 
   public [prettyPrintTag](): string {
-    return this.recordType[prettyPrintTag]() + '.' + this.fieldName;
+    return this.sourceType[prettyPrintTag]() + '.' + this.fieldName;
   }
 
   public hasTypeVariable(typeVar: TypeVar): boolean {
-    return this.recordType.hasTypeVariable(typeVar);
+    return this.sourceType.hasTypeVariable(typeVar);
   }
 
-  public applySubstitution(substitution: TypeVarSubstitution): RecordFieldType {
-    return new RecordFieldType(
-      this.recordType.applySubstitution(substitution),
+  public applySubstitution(substitution: TypeVarSubstitution): MemberType {
+    return new MemberType(
+      this.sourceType.applySubstitution(substitution),
       this.fieldName,
+      this.signature,
+      this.scope,
       this.node,
     );
   }
@@ -339,12 +503,23 @@ export class RecordFieldType extends TypeBase {
     return this.solved.resolve();
   }
 
-  public deepClone(): RecordFieldType {
-    return new RecordFieldType(
-      this.recordType.deepClone(),
+  public shallowClone(): MemberType {
+    return new MemberType(
+      this.sourceType,
       this.fieldName,
+      this.signature,
+      this.scope,
       this.node,
     );
+  }
+
+  public *getFreeTypeVars(): Iterable<TypeVar> {
+    yield* this.sourceType.getFreeTypeVars();
+    if (this.signature !== null) {
+      for (const paramType of this.signature) {
+        yield* paramType.getFreeTypeVars();
+      }
+    }
   }
 
 }
@@ -443,6 +618,146 @@ export class TypeVarSet {
 
   public [Symbol.iterator]() {
     return this.typeVarIds.values();
+  }
+
+}
+
+export type Scheme
+  = ForallScheme
+
+export class ForallScheme {
+
+  public typeVars: TypeVarSet;
+
+  constructor(
+    typeVars: TypeVarSet | Iterable<TypeVar> = [],
+    public type: Type,
+  ) {
+    if (typeVars instanceof TypeVarSet) {
+      this.typeVars = typeVars;
+    } else if (Array.isArray(typeVars)) {
+      this.typeVars = new TypeVarSet;
+      for (const typeVar of typeVars) {
+        this.typeVars.add(typeVar)
+      }
+    } else {
+      throw new Error(`Could not create a type variable set out of the given argument`);
+    }
+  }
+
+  public getFreeVariables(): TypeVarSet {
+    const freeVariables = new TypeVarSet(this.type.getFreeTypeVars());
+    for (const typeVar of this.typeVars) {
+      if (freeVariables.has(typeVar)) {
+        freeVariables.delete(typeVar);
+      }
+    }
+    return freeVariables;
+  }
+
+  public applySubstitution(substitution: TypeVarSubstitution): Scheme {
+    const newSubstitution = new TypeVarSubstitution();
+    for (const [typeVar, mappedType] of substitution) {
+      if (!this.typeVars.has(typeVar)) {
+        newSubstitution.add(typeVar, mappedType);
+      }
+    }
+    return new ForallScheme(
+      this.typeVars,
+      this.type.applySubstitution(newSubstitution)
+    );
+  }
+
+}
+
+/**
+ * Instantiate the type inside the scheme with some fresh variables that are
+ * guaranteed to not occur anywhere else.
+ */
+function instantiate(scheme: Scheme): Type {
+  const freshVars = new TypeVarSubstitution();
+  for (const typeVar of scheme.typeVars) {
+    freshVars.add(typeVar, new TypeVar(typeVar.node))
+  }
+  return scheme.type.applySubstitution(freshVars);
+}
+
+export class TypeEnv {
+
+  private mapping = new FastMultiMap<string, Scheme>();
+
+  constructor(public parentTypeEnv: TypeEnv | null = null) {
+
+  }
+
+  public set(name: string, scheme: Scheme) {
+    this.mapping.add(name, scheme)
+  }
+
+  public *getSchemes(name: string): Iterable<Scheme> {
+    let currEnv: TypeEnv | null = this;
+    while (true) {
+      yield* currEnv!.mapping.get(name);
+      currEnv = currEnv.parentTypeEnv;
+      if (currEnv === null) {
+        break;
+      }
+    }
+  }
+
+  public lookup(name: string): Type | null {
+    const { done, value } = this.getSchemes(name)[Symbol.iterator]().next();
+    if (done) {
+      return null;
+    }
+    return instantiate(value);
+  }
+
+  //public lookup(name: string): Type {
+  //  const types = [];
+  //  for (const scheme of this.getSchemes(name)) {
+  //    types.push(instantiate(scheme));
+  //  }
+  //  return new OverloadType(this, types);
+  //}
+
+  public has(name: string): boolean {
+    let currEnv: TypeEnv | null = this;
+    while (true) { 
+      if (currEnv!.mapping.has(name)) {
+        return true;
+      }
+      currEnv = currEnv.parentTypeEnv;
+      if (currEnv === null) {
+        return false;
+      }
+    }
+  }
+
+  public clone(): TypeEnv {
+    const result = new TypeEnv(this.parentTypeEnv);
+    for (const [name, scheme] of this.mapping) {
+      result.set(name, scheme);
+    }
+    return result;
+  }
+
+  public getFreeVariables(): TypeVarSet {
+    const freeVariables = new TypeVarSet();
+    let currEnv: TypeEnv | null = this;
+    do {
+      for (const scheme of currEnv.mapping.values()) {
+        for (const typeVar of scheme.getFreeVariables()) {
+          freeVariables.add(typeVar);
+        }
+      }
+      currEnv = currEnv!.parentTypeEnv;
+    } while (currEnv !== null);
+    return freeVariables;
+  }
+
+  public [Symbol.iterator]() {
+    return this.mapping[Symbol.iterator]();
   }
 
 }

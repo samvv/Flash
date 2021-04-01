@@ -1,11 +1,11 @@
 
 import chalk from "chalk";
 
-import { VariableDeclaration, Syntax, SyntaxKind, RecordDeclaration, isSyntax } from "./ast";
-import { format, MapLike, FormatArg, assert, escapeChar, countDigits } from "./util";
+import { VariableDeclaration, Syntax, SyntaxKind, RecordDeclaration, isSyntax, FunctionDeclaration } from "./ast";
+import { format, MapLike, FormatArg, assert, escapeChar, countDigits, prettyPrint } from "./util";
 import { TextPos, TextFile, TextSpan } from "./text";
 import { describeKind, EOF } from "./common";
-import { isType } from "./types";
+import { isType, MemberType } from "./types";
 import { ArrowType, Type, TypeVar } from "./types";
 import {BOLT_DIAG_NUM_EXTRA_LINES} from "./constants";
 
@@ -36,7 +36,7 @@ export const E_TYPE_UNIFICATION_FAILURE = "Types '{left}' and '{right}' could no
 export const E_THIS_NODE_CAUSED_INVALID_TYPE = "This expression resolved to the type {type}, which is incompatible with {origType}."
 export const E_TOO_FEW_ARGUMENTS_FOR_FUNCTION_CALL = "Too few arguments for function call. Expected {expected} but got {actual}.";
 export const E_TOO_MANY_ARGUMENTS_FOR_FUNCTION_CALL = "Too many arguments for function call. Expected {expected} but got {actual}.";
-export const E_NOT_CALLABLE = "The result of this expression is not callable."
+export const E_NOT_CALLABLE = "The type {type} is not callable."
 export const E_CANDIDATE_FUNCTION_REQUIRES_THIS_PARAMETER = "Candidate function requires this parameter."
 export const E_ARGUMENT_HAS_NO_CORRESPONDING_PARAMETER = "This argument is missing a corresponding parameter."
 export const E_INVALID_ARGUMENTS = "Invalid arguments passed to function '{name}'"
@@ -48,7 +48,9 @@ export const E_ARGUMENT_TYPE_NOT_ASSIGNABLE = "This argument's type '{argType}' 
 export const E_PARAMETER_DECLARED_HERE = "The parameter was declared here with type {type}."
 export const E_BUILTIN_TYPE_MISSING = "A built-in type named '{name}' was not found in the prelude."
 export const E_BOLTFILE_INVALID = "The Boltfile in {path} is not valid."
-export const E_TYPE_IS_NO_RECORD = "Trying to access field {fieldName} of type {type} which is not a record"
+export const E_TYPE_IS_NO_RECORD = "Trying to access field '{fieldName}' of type {type}, which is not a record."
+export const E_CANDIDATE_FUNCTION_NOT_FOUND = "A matching function named '{type.fieldName}' with signature ({type.signature:join}) -> any was not found in the current scope.";
+export const E_AMBIGUOUS_FUNCTION_CALL = "Ambiguous function call to '{memberName}'."
 
 interface CompileErrorFormatOptions {
   indentation?: string;
@@ -204,6 +206,28 @@ export class TypeIsNoRecordError extends CompileError {
 
 }
 
+export class CandidateFunctionNotFoundError extends CompileError {
+
+  public readonly severity = 'error';
+
+  constructor(public type: MemberType, public candidates: Type[]) {
+    super(E_CANDIDATE_FUNCTION_NOT_FOUND);
+  }
+
+  public format({ indentation }: CompileErrorFormatOptions): string {
+    let out = super.format({ indentation });
+    for (const candidate of this.candidates) {
+      if (candidate.node !== null) {
+        const declaration = candidate.node as FunctionDeclaration;
+        out += `Candidate function defined here but it did not match the required signature:\n\n`
+        out += printExcerpt(candidate.node.span!, { highlightRange: declaration.name.span!, highlightColor: 'blue' });
+      }
+    }
+    return out;
+  }
+
+}
+
 export class BoltfileNotFoundError extends CompileError {
 
   public readonly severity = 'fatal';
@@ -278,6 +302,32 @@ export class ParamCountMismatchError extends CompileError {
     super(E_PARAM_COUNT_MISMATCH);
     this.leftCount = left.paramTypes.length;
     this.rightCount = right.paramTypes.length;
+  }
+
+}
+
+export class NotCallableError extends CompileError {
+
+  public readonly severity = 'error';
+
+  constructor(public type: Type) {
+    super(E_NOT_CALLABLE);
+    if (type.node !== null) {
+      this.node = type.node;
+    }
+  }
+
+}
+
+export class AmbigiousFunctionCallError extends CompileError {
+
+  public readonly severity = 'error';
+
+  constructor(public type: Type, public candidates: Type[]) {
+    super(E_AMBIGUOUS_FUNCTION_CALL);
+    if (type.node !== null) {
+      this.node = type.node;
+    }
   }
 
 }

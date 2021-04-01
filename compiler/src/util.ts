@@ -335,21 +335,26 @@ export class FastMultiMap<K, V> {
     this.mapping = Object.create(null);
   }
 
-  public get(key: K): IterableIterator<V> {
-    if (this.mapping[key] === undefined) {
-      return new EmptyIterator;
+  public *get(key: K): Iterable<V> {
+    if (this.mapping[key] !== undefined) {
+      yield* this.mapping[key];
     }
-    return this.mapping[key][Symbol.iterator]();
   }
 
   public add(key: K, value: V) {
     const keyStr = getKey(key);
     if (keyStr in this.mapping) {
-      this.mapping[keyStr].push(keyStr);
+      this.mapping[keyStr].push(value);
     } else {
       this.mapping[keyStr] = [ value ]
     }
     this.size++;
+  }
+
+  public *values(): Iterable<V> {
+    for (const key of Object.keys(this.mapping)) {
+      yield* this.mapping[key];
+    }
   }
 
   public has(key: K): boolean {
@@ -690,6 +695,9 @@ const FORMAT_MODIFIERS: MapLike<FormatModifierFn> = {
   },
   pretty(value) {
     return value.map(prettyPrint);
+  },
+  join(elements) {
+    return elements.map(prettyPrint).join(', ');
   }
 }
 
@@ -697,6 +705,7 @@ export function format(message: string, data: MapLike<FormatArg>) {
 
   let out = ''
 
+  let path: string[] = [];
   let name = '';
   let modifierName = '';
   let modifiers: string[] = [];
@@ -724,7 +733,10 @@ export function format(message: string, data: MapLike<FormatArg>) {
         if (ch === '}') {
           push();
         } else if (ch === ':') {
-          mode = FormatScanMode.ScanningParamModifier;
+          mode = FormatScanMode.ScanningParamModifier; 
+        } else if (ch === '.') {
+          path.push(name);
+          name = '';
         } else {
           name += ch;
         }
@@ -744,7 +756,11 @@ export function format(message: string, data: MapLike<FormatArg>) {
   return out;
 
   function push() {
-    let value = data[name]!;
+    let value = data;
+    for (const pathElement of path) {
+      value = value[pathElement];
+    }
+    value = value[name];
     if (value === undefined) {
       throw new Error(`Format string requires key '${name}' but it was not provided.`)
     }
@@ -760,6 +776,7 @@ export function format(message: string, data: MapLike<FormatArg>) {
   }
 
   function reset() {
+    path = [];
     name = '';
     modifierName = '';
     mode = FormatScanMode.Text;

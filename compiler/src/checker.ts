@@ -1,4 +1,13 @@
 
+// TODO simplify() now is run seperately from unify(). In theory, simplify()
+//      should only run when a type variable was actually substituted. It
+//      should be possible to call simplify() only after substitution and
+//      maybe even to only simplify the top-level substituted type.
+
+// TODO Types for declarations should be generated in two categories: one for
+//      variable declarations that are considered to be globally unique, and
+//      one for functions that may be overloaded.
+
 import {
   Modifiers,
   Pattern,
@@ -15,6 +24,7 @@ import {
   Syntax,
   SyntaxKind,
   isRecordDeclarationField,
+  isMemberExpression,
 } from "./ast";
 import { getSymbolText } from "./common";
 import {
@@ -26,6 +36,9 @@ import {
   UnificationError,
   RecordFieldNotFoundError,
   TypeIsNoRecordError,
+  CandidateFunctionNotFoundError,
+  NotCallableError,
+  AmbigiousFunctionCallError,
 } from "./errors";
 import { Program } from "./program";
 import { assert, FastStringMap } from "./util";
@@ -35,6 +48,8 @@ import {
   TypeVar,
   TypeVarSubstitution,
   TypeVarSet,
+  TypeEnv,
+  Scheme,
   ArrowType,
   PrimType,
   TupleType,
@@ -43,192 +58,17 @@ import {
   stringType,
   areTypesEqual,
   RecordType,
-  RecordFieldType,
+  MemberType,
+  ForallScheme,
+  NeverType,
+  OverloadType,
+  Signature,
 } from "./types"
-
-function getFreeVariablesOfType(type: Type): TypeVarSet {
-
-  const freeVariables = new TypeVarSet();
-
-  const visit = (type: Type) => {
-
-    switch (type.kind) {
-
-      case TypeKind.TypeVar:
-        freeVariables.add(type);
-        break;
-
-      case TypeKind.PrimType:
-        break;
-
-      case TypeKind.RecordType:
-        for (const [_fieldName, fieldType] of type) {
-          visit(fieldType);
-        }
-        break;
-
-      case TypeKind.RecordFieldType:
-        visit(type.recordType);
-        break;
-
-      case TypeKind.ArrowType:
-        for (const paramType of type.paramTypes) {
-          visit(paramType);
-        }
-        visit(type.returnType);
-        break;
-
-      default:
-        throw new Error(`Could not get the free type variables: unknown type kind`);
-
-    }
-
-  }
-
-  visit(type);
-
-  return freeVariables;
-
-}
-
-class ForallScheme {
-
-  public typeVars: TypeVarSet;
-
-  constructor(
-    typeVars: TypeVarSet | Iterable<TypeVar> = [],
-    public type: Type,
-  ) {
-    if (typeVars instanceof TypeVarSet) {
-      this.typeVars = typeVars;
-    } else if (Array.isArray(typeVars)) {
-      this.typeVars = new TypeVarSet;
-      for (const typeVar of typeVars) {
-        this.typeVars.add(typeVar)
-      }
-    } else {
-      throw new Error(`Could not create a type variable set out of the given argument`);
-    }
-  }
-
-  public getFreeVariables(): TypeVarSet {
-    const freeVariables = getFreeVariablesOfType(this.type);
-    for (const typeVar of this.typeVars) {
-      if (freeVariables.has(typeVar)) {
-        freeVariables.delete(typeVar);
-      }
-    }
-    return freeVariables;
-  }
-
-  public applySubstitution(substitution: TypeVarSubstitution): Scheme {
-    const newSubstitution = new TypeVarSubstitution();
-    for (const [typeVar, mappedType] of substitution) {
-      if (!this.typeVars.has(typeVar)) {
-        newSubstitution.add(typeVar, mappedType);
-      }
-    }
-    return new ForallScheme(
-      this.typeVars,
-      this.type.applySubstitution(newSubstitution)
-    );
-  }
-
-}
-
-type Scheme
-  = ForallScheme
 
 type Constraint = [Type, Type]
 
-export class TypeEnv {
-
-  private mapping = new FastStringMap<string, Scheme>();
-
-  constructor(public parentTypeEnv: TypeEnv | null = null) {
-
-  }
-
-  public set(name: string, scheme: Scheme) {
-    this.mapping.add(name, scheme)
-  }
-
-  public remove(name: string): void {
-    this.mapping.delete(name)
-  }
-
-  public lookup(name: string): Type | null {
-
-    let scheme;
-    let currEnv: TypeEnv | null = this;
-
-    while (true) { 
-
-      // Check if the binding exists. It's the caller's responsibility to so
-      // something sensible if the binding was not found.
-      if (currEnv!.mapping.has(name)) {
-        scheme = currEnv.mapping.get(name);
-        break;
-      }
-
-      currEnv = currEnv.parentTypeEnv;
-
-      // If we went through every parent environment and still did not found a
-      // valid type, then we return nothing.
-      if (currEnv === null) {
-        return null;
-      }
-
-    }
-
-    // Now we instantiate the type inside the scheme with some fresh variables
-    // that are guaranteed to not occur anywhere else.
-    const freshVars = new TypeVarSubstitution();
-    for (const typeVar of scheme.typeVars) {
-      freshVars.add(typeVar, new TypeVar(typeVar.node))
-    }
-    return scheme.type.applySubstitution(freshVars);
-  }
-
-  public has(name: string): boolean {
-    let currEnv: TypeEnv | null = this;
-    while (true) { 
-      if (currEnv!.mapping.has(name)) {
-        return true;
-      }
-      currEnv = currEnv.parentTypeEnv;
-      if (currEnv === null) {
-        return false;
-      }
-    }
-  }
-
-  public clone(): TypeEnv {
-    const result = new TypeEnv(this.parentTypeEnv);
-    for (const [name, scheme] of this.mapping) {
-      result.set(name, scheme);
-    }
-    return result;
-  }
-
-  public getFreeVariables(): TypeVarSet {
-    const freeVariables = new TypeVarSet();
-    let currEnv: TypeEnv | null = this;
-    do {
-      for (const scheme of currEnv.mapping.values()) {
-        for (const typeVar of scheme.getFreeVariables()) {
-          freeVariables.add(typeVar);
-        }
-      }
-      currEnv = currEnv!.parentTypeEnv;
-    } while (currEnv !== null);
-    return freeVariables;
-  }
-
-}
-
 function generalizeType(type: Type, typeEnv: TypeEnv): Scheme {
-  const freeVariables = getFreeVariablesOfType(type);
+  const freeVariables = new TypeVarSet(type.getFreeTypeVars());
   for (const typeVar of typeEnv.getFreeVariables()) {
     if (freeVariables.has(typeVar)) {
       freeVariables.delete(typeVar)
@@ -271,12 +111,12 @@ export class TypeChecker {
     this.builtinTypeEnv.set('Bool', new ForallScheme([], boolType))
     this.builtinTypeEnv.set('false', new ForallScheme([], boolType))
     this.builtinTypeEnv.set('true', new ForallScheme([], boolType))
-    this.builtinTypeEnv.set('+', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
-    this.builtinTypeEnv.set('-', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
-    this.builtinTypeEnv.set('/', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
-    this.builtinTypeEnv.set('*', new ForallScheme([], new ArrowType([ intType, intType ], intType)))
-    this.builtinTypeEnv.set('==', new ForallScheme([], new ArrowType([ intType, intType ], boolType)))
-    this.builtinTypeEnv.set('!=', new ForallScheme([], new ArrowType([ intType, intType ], boolType)))
+    this.builtinTypeEnv.set('+', new ForallScheme([], new ArrowType([ intType, intType ], intType, true)))
+    this.builtinTypeEnv.set('-', new ForallScheme([], new ArrowType([ intType, intType ], intType, true)))
+    this.builtinTypeEnv.set('/', new ForallScheme([], new ArrowType([ intType, intType ], intType, true)))
+    this.builtinTypeEnv.set('*', new ForallScheme([], new ArrowType([ intType, intType ], intType, true)))
+    this.builtinTypeEnv.set('==', new ForallScheme([], new ArrowType([ intType, intType ], boolType, true)))
+    this.builtinTypeEnv.set('!=', new ForallScheme([], new ArrowType([ intType, intType ], boolType, true)))
   }
 
   private addConstraint(constraint: Constraint) {
@@ -509,10 +349,10 @@ export class TypeChecker {
 
       case SyntaxKind.MemberExpression:
       {
-        const recordType = this.inferNode(node.expression, typeEnv, returnType);
         assert(node.path.length === 1);
-        const fieldName = node.path[0].text;
-        return new RecordFieldType(recordType, fieldName, node)
+        const memberName = node.path[0].text;
+        const sourceType = this.inferNode(node.expression, typeEnv, returnType);
+        return new MemberType(sourceType, memberName, null, typeEnv, node)
       }
 
       case SyntaxKind.RecordExpression:
@@ -524,7 +364,6 @@ export class TypeChecker {
           throw new BindingNotFoundError(node.typeRef.name, recordName);
         }
         assert(recordType.kind === TypeKind.RecordType);
-        const fieldTypes: Array<[string, Type]> = [];
         for (const field of node.fields) {
           let fieldType;
           if (field.value === null) {
@@ -633,7 +472,7 @@ export class TypeChecker {
           const returnType = new TypeVar(node);
           this.addConstraint([
             fnType,
-            new ArrowType(paramTypes, returnType, node)
+            new ArrowType(paramTypes, returnType, true, node)
           ]);
 
           if (node.returnTypeExpr !== null) {
@@ -695,7 +534,7 @@ export class TypeChecker {
               throw new UninitializedBindingError(node);
             }
 
-            resultType = this.inferNode(node.value!, typeEnv);
+            resultType = this.inferNode(node.value, typeEnv);
 
             this.inferBinding(node.bindings, resultType, typeEnv, true);
           }
@@ -747,33 +586,42 @@ export class TypeChecker {
         }
 
       case SyntaxKind.CallExpression:
-        {
-          // This type variable will contain the type that the call expression
-          // resolves to.
-          const returnType = new TypeVar(node);
+      {
 
-          // First we build a type of the function that has been called. This
-          // type should eventually resolve to an ArrowType.
-          const operatorType = this.inferNode(node.operator, typeEnv)
-
-          // Build a list of types that correspond to the parameters of the
-          // function being called.
-          const operandTypes = [];
-          for (const operand of node.operands) {
-            const operandType = this.inferNode(operand, typeEnv);
-            operandTypes.push(operandType)
-          }
-
-          // Now make sure that the signature built out of these parameter types
-          // actually match the function being called. They will be solved later
-          // by the unifier.
-          this.addConstraint([
-            operatorType,
-            new ArrowType(operandTypes, returnType, node)
-          ]);
-
-          return returnType;
+        if (isMemberExpression(node.operator)) {
+          assert(node.operator.path.length === 1);
+          const memberName = node.operator.path[0].text;
+          const sourceType = this.inferNode(node.operator.expression, typeEnv, returnType);
+          const paramTypes = node.operands.map(op => this.inferNode(op, typeEnv, exprReturnType));
+          return new MemberType(sourceType, memberName, [sourceType, ...paramTypes], typeEnv, node);
         }
+
+        // This type variable will contain the type that the call expression
+        // resolves to.
+        const exprReturnType = new TypeVar(node);
+
+        // First we build a type of the function that has been called. This
+        // type should eventually resolve to an ArrowType.
+        const operatorType = this.inferNode(node.operator, typeEnv)
+
+        // Build a list of types that correspond to the parameters of the
+        // function being called.
+        const operandTypes = [];
+        for (const operand of node.operands) {
+          const operandType = this.inferNode(operand, typeEnv);
+          operandTypes.push(operandType)
+        }
+
+        // Now make sure that the signature built out of these parameter types
+        // actually match the function being called. They will be solved later
+        // by the unifier.
+        this.addConstraint([
+          operatorType,
+          new ArrowType(operandTypes, exprReturnType, false, node)
+        ]);
+
+        return exprReturnType;
+      }
 
       case SyntaxKind.FunctionExpression:
         {
@@ -792,7 +640,7 @@ export class TypeChecker {
           // Whatever the function returns is eventually determined by its body.
           let returnType: Type;
           if (node.expression !== null) {
-           returnType = this.inferNode(node.expression!, newEnv); 
+           returnType = this.inferNode(node.expression, newEnv); 
           } else {
             throw new Error(`Not supported yet.`)
           }
@@ -800,6 +648,7 @@ export class TypeChecker {
           return new ArrowType(
             paramTypes,
             returnType,
+            false,
             node
           );
 
@@ -869,30 +718,135 @@ export class TypeChecker {
     }
 
     for (const type of this.nodeToType.values()) {
-      this.simplify(type.solved);
+      this.simplify(type);
     }
 
   }
 
   private simplify(type: Type) {
+
     type = type.solved;
-    if (type.kind === TypeKind.RecordFieldType) {
-      const recordType = type.recordType.solved;
-      if (recordType.kind === TypeKind.RecordType) {
-        if (!recordType.hasField(type.fieldName)) {
-          throw new RecordFieldNotFoundError(type.node!, recordType.declaration, recordType.declaration.name.text, type.fieldName);
-        }
-        const fieldType = recordType.getFieldType(type.fieldName);
-        type.solved = fieldType
-        this.simplify(fieldType);
-      } else if (recordType.kind !== TypeKind.TypeVar) {
-        throw new TypeIsNoRecordError(recordType, type.fieldName);
-      }
-      return;
-    }
+
+    // A primitive type, a type variable and a record type cannot be simplified
+    // any further at this stage. Type variables are solved in the unifier, and
+    // the field types of record types should never be able access a member of
+    // something else.
     if (type.kind === TypeKind.PrimType || type.kind === TypeKind.TypeVar || type.kind === TypeKind.RecordType) {
       return;
     }
+
+    //if (type.kind === TypeKind.OverloadType) {
+    //  if (type.types.length === 0) {
+    //    type.solved = new NeverType(null);
+    //    return;
+    //  }
+    //  if (type.types.length === 1) {
+    //    type.solved = type.types[0];
+    //    return;
+    //  }
+    //  for (const overloadedType of type.types) {
+    //    this.simplify(overloadedType);
+    //  }
+    //  let newTypes = [ type.types[0] ];
+    //  for (let i = 1; i < type.types.length; i++) {
+    //    let curr: Type = type.types[i-1];
+    //    let next: Type = type.types[i];
+    //    if (areTypesEqual(curr, next)) {
+    //      continue;
+    //    }
+    //    newTypes.push(next)
+    //  }
+    //  if (newTypes.length < type.types.length) {
+    //    type = type.solved = new OverloadType(type.typeEnv, newTypes);
+    //  }
+    //  return;
+    //}
+
+    if (type.kind === TypeKind.MemberType) {
+
+      const sourceType = type.sourceType.solved;
+
+      if (sourceType.kind === TypeKind.TypeVar) {
+        return;
+      }
+
+      // Special case where we try to directly access the field of a record type.
+      if (type.signature === null) {
+
+        if (sourceType.kind === TypeKind.RecordType) {
+          if (!sourceType.hasField(type.fieldName)) {
+            throw new RecordFieldNotFoundError(type.node!, sourceType.declaration, sourceType.declaration.name.text, type.fieldName);
+          }
+          const fieldType = sourceType.getFieldType(type.fieldName);
+          type.solved = fieldType
+          this.simplify(fieldType);
+          return;
+        }
+
+        // The case where sourceType is a type variable was already handled by
+        // the above check and all other types do not provide record field access,
+        // so we should throw an error.
+        throw new TypeIsNoRecordError(sourceType, type.fieldName);
+      }
+
+      let results: ArrowType[] = [];
+
+      const candidates = [...type.scope.getSchemes(type.fieldName)];
+
+      const signaturesMatch = (a: Signature, b: Signature, allowedTypeVars: TypeVarSet) => {
+        if (a === null || b === null) {
+          return a === null && b === null;
+        }
+        if (a.length !== b.length) {
+          return false;
+        }
+        for (let i = 0; i < a.length; i++) {
+          const paramTypeA = a[i].solved;
+          const paramTypeB = b[i].solved;
+          if (paramTypeA.kind === TypeKind.TypeVar && allowedTypeVars.has(paramTypeA)) {
+            continue;
+          }
+          if (!areTypesEqual(paramTypeA, paramTypeB)) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      for (const candidate of candidates) {
+        const candidateType = candidate.type.solved;
+        const signature = type.signature;
+        if (candidateType.kind === TypeKind.TypeVar) {
+          continue;
+        }
+        if (candidateType.kind !== TypeKind.ArrowType) {
+          throw new NotCallableError(candidateType);
+        }
+        if (!candidateType.overloaded) {
+          if (results.length === 0) {
+            results = [ candidateType ];
+          }
+          break;
+        }
+        if (signaturesMatch(candidateType.paramTypes, signature, candidate.typeVars)) {
+          results.push(candidateType);
+        }
+      }
+
+      if (results.length === 0) {
+        throw new CandidateFunctionNotFoundError(type, candidates.map(candidate => candidate.type));
+      }
+      if (results.length > 1) {
+        throw new AmbigiousFunctionCallError(type, results);
+      }
+
+      type.solved = results[0].returnType.solved;
+      return;
+    }
+
+    // The following code simply traverses the type structure in order to
+    // simplify a part of it.
+
     if (type.kind === TypeKind.ArrowType) {
       for (const paramType of type.paramTypes) {
         this.simplify(paramType)
@@ -906,7 +860,10 @@ export class TypeChecker {
       }
       return;
     }
-    throw new Error(`Could not simplify type: unexpected kind of type`)
+
+    // We should have handled all types by now. If not, this is a bug in the
+    // compiler.
+    throw new Error(`Could not simplify type: unexpected kind ${type.kind}`)
   }
 
   private unify(a: Type, b: Type): void {

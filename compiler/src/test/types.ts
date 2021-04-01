@@ -345,17 +345,18 @@ foo.a = 1;
   t.assert(error instanceof UnificationError);
 });
 
-//test('an instance of a record can be overloaded with any matching function', t => {
-//  const sourceFile = loadSourceFile(`
-//struct Wrapper {
-//  value: Int,
-//}
-//fn get(wrapper: Wrapper) {
-//  return wrapper.value;
-//}
-//let foo = Wrapper { value: 1 }
-//foo.get();
-//`)
-//  t.assert(isIntType((sourceFile.elements[3] as ExpressionStatement).expression.getType()));
-//});
+test('an instance of a record can be overloaded with any matching function', t => {
+  const sourceFile = loadSourceFile(`
+struct Wrapper {
+  value: Int,
+}
+fn get(wrapper: Wrapper) {
+  return wrapper.value;
+}
+let foo = Wrapper { value: 1 }
+foo.get();
+`)
+  const exprType = (sourceFile.elements[3] as ExpressionStatement).expression.getType();
+  t.assert(isIntType(exprType));
+});
 
