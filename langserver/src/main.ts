@@ -12,7 +12,7 @@ import {
   ProposedFeatures,
   TextDocuments,
   TextDocumentSyncKind
-} from "vscode-languageserver";
+} from "vscode-languageserver/node";
 import IntervalTree from "@flatten-js/interval-tree"
 import { TextDocument } from "vscode-languageserver-textdocument";
 

@@ -6,7 +6,7 @@
     "bolt-langserver": "lib/main.js"
   },
   "scripts": {
-    "prepare": "tsc",
+    "prepare": "tsc || exit 0",
     "watch": "tsc -w --preserveWatchOutput",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -28,13 +28,13 @@
   },
   "homepage": "https://github.com/BoltLang/BoltJS#readme",
   "dependencies": {
-    "@flatten-js/interval-tree": "^1.0.13",
-    "minimist": "^1.2.5",
-    "vscode-languageserver": "^6.1.1",
-    "vscode-languageserver-textdocument": "^1.0.1"
+    "@flatten-js/interval-tree": "^1.0.19",
+    "minimist": "^1.2.7",
+    "vscode-languageserver": "^8.0.2",
+    "vscode-languageserver-textdocument": "^1.0.7"
   },
   "devDependencies": {
-    "@types/minimist": "^1.2.1",
-    "typescript": "^4.2.3"
+    "@types/minimist": "^1.2.2",
+    "typescript": "^4.8.4"
   }
 }

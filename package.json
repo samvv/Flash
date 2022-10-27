@@ -23,6 +23,6 @@
   },
   "homepage": "https://github.com/samvv/BoltJS#readme",
   "devDependencies": {
-    "@samvv/bake": "^0.1.4"
+    "@samvv/bake": "^0.1.5"
   }
 }
